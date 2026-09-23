@@ -1,0 +1,8 @@
+{
+  "include": ["packages/guardrail-sdk/guardrail_sdk", "services/guardrail-gateway/app"],
+  "extraPaths": ["packages/guardrail-sdk", "services/guardrail-gateway"],
+  "pythonVersion": "3.11",
+  "typeCheckingMode": "basic",
+  "reportMissingImports": "warning",
+  "reportMissingModuleSource": "none"
+}

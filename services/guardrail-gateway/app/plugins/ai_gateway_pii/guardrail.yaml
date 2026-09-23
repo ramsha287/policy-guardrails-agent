@@ -1,0 +1,48 @@
+id: ai-gateway-pii
+version: 1.0.0
+kind: remote
+description: >
+  PII detection and redaction through the existing AI Security Gateway
+  (instant-redaction-service, Presidio). Entities, custom regex patterns and the
+  redaction type (replace, mask, hash) come from the ai-gateway project.
+owner: ai-security
+data_handling: >
+  Sends text to the in-cluster instant-redaction-service only. Stores nothing. Returns
+  entity types, offsets and scores, never matched values.
+stages: [input, output]            # retrieval + tool arrive in 1.1.0 (phase 3)
+decisions_emitted: [allow, modify, block]
+failure_mode: fail_closed
+sdk_version: ">=1.0,<2.0"
+latency_budget_ms: 300
+capabilities:
+  emits_modify: true
+  needs_state: false
+  needs_raw_payload: true
+  parallel_safe: false
+  supports_batch: false
+  max_payload_kb: 1024
+entrypoint: app.plugins.ai_gateway_pii.guardrail:AiGatewayPiiGuardrail
+remote:
+  endpoint: http://instant-redaction-service:8001   # override per assignment with config.base_url
+  auth: api_key
+  api_key_ref: env://AI_GATEWAY_API_KEY
+  timeout_ms: 800
+config_schema:
+  type: object
+  additionalProperties: false
+  required: [project_id]
+  properties:
+    project_id: {type: string, format: uuid, description: ai-gateway redaction project}
+    base_url: {type: string, description: overrides remote.endpoint}
+    input:
+      type: object
+      properties:
+        on_detect: {enum: [modify, block, allow], default: modify}
+        block_entities: {type: array, items: {type: string}}
+        scan_roles: {type: array, items: {enum: [system, user, assistant, tool]}, default: [user]}
+    output:
+      type: object
+      properties:
+        on_detect: {enum: [modify, block, allow], default: modify}
+        block_entities: {type: array, items: {type: string}}
+        scan_roles: {type: array, items: {enum: [system, user, assistant, tool]}, default: [assistant]}

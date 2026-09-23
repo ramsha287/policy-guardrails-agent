@@ -1,0 +1,15 @@
+# Reference local guardrail: always allows. Used for engine smoke tests and as the
+# template for new in-process guardrails (`kind: local`).
+id: noop
+version: 1.0.0
+kind: local
+description: Always returns ALLOW. Template and smoke test for the engine.
+owner: ai-security
+data_handling: Reads nothing, stores nothing.
+stages: [input, retrieval, tool, output, agent]
+decisions_emitted: [allow]
+failure_mode: fail_open
+latency_budget_ms: 5
+capabilities:
+  parallel_safe: true
+entrypoint: app.plugins.noop.guardrail:NoopGuardrail

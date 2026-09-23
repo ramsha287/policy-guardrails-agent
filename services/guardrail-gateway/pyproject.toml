@@ -1,0 +1,8 @@
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+markers = ["integration: needs PostgreSQL (POSTGRES_TEST_DSN)"]
+
+[tool.mypy]
+python_version = "3.11"
+ignore_missing_imports = true
