@@ -1,0 +1,57 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-gateway}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-gateway}
+      POSTGRES_DB: ${POSTGRES_DB:-gateway}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - redaction-net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-gateway} -d ${POSTGRES_DB:-gateway}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  project-service:
+    ports:
+      - "8000:8000"
+    build:
+      context: ./project-service
+    env_file:
+      - ./project-service/.env
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - redaction-net
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/ai-gateway/project/api/health')"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 10s
+
+  instant-redaction-service:
+    ports:
+      - "8001:8001"
+    build:
+      context: ./instant-redaction-service
+    env_file:
+      - ./instant-redaction-service/.env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      project-service:
+        condition: service_healthy
+    networks:
+      - redaction-net
+
+volumes:
+  postgres_data:
+
+networks:
+  redaction-net:
+    driver: bridge
