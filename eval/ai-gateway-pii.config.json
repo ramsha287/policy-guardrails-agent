@@ -1,0 +1,8 @@
+{
+  "project_id": "${AI_GATEWAY_PROJECT_ID}",
+  "base_url": "${AI_GATEWAY_URL:-http://localhost:8001}",
+  "input": {"on_detect": "modify", "block_entities": ["US_SSN"]},
+  "output": {"on_detect": "modify", "block_entities": ["CREDIT_CARD", "US_SSN"]},
+  "retrieval": {"on_detect": "modify", "block_entities": ["US_SSN", "CREDIT_CARD"]},
+  "tool": {"external_tools": ["http.*", "email.*"], "external_on_detect": "block"}
+}

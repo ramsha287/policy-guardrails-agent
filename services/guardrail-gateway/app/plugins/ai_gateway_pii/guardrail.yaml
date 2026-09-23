@@ -9,7 +9,7 @@ owner: ai-security
 data_handling: >
   Sends text to the in-cluster instant-redaction-service only. Stores nothing. Returns
   entity types, offsets and scores, never matched values.
-stages: [input, output]            # retrieval + tool arrive in 1.1.0 (phase 3)
+stages: [input, output]            # kept for rollback; 1.1.0 adds retrieval + tool
 decisions_emitted: [allow, modify, block]
 failure_mode: fail_closed
 sdk_version: ">=1.0,<2.0"

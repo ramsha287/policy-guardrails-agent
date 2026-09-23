@@ -56,7 +56,7 @@ tool_allowed if input.tool_name in input.agent.allowed_tools
 # if an obligated guardrail is not assigned for the stage.
 obligations contains "ai-gateway-pii" if {
 	input.context.data_classification in {"PII", "CONFIDENTIAL"}
-	input.stage in {"input", "output"}
+	input.stage in {"input", "retrieval", "tool", "output"}
 }
 
 reason := "allowed" if allow

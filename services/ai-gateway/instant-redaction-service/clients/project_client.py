@@ -1,4 +1,5 @@
 import logging
+import time
 
 import httpx
 from fastapi import HTTPException
@@ -9,11 +10,35 @@ logger = logging.getLogger(__name__)
 
 
 class ProjectClient:
-    def __init__(self, client: httpx.AsyncClient, base_url: str):
+    """Fetches project config from project-service, with a short TTL cache.
+
+    Entries are also evicted immediately when project-service publishes a change
+    (see `utils/project_events.py`), so the TTL is only a safety net.
+    """
+
+    def __init__(self, client: httpx.AsyncClient, base_url: str, cache_ttl_seconds: float = 60.0):
         self._client = client
         self._base_url = base_url.rstrip("/")
+        self._ttl = cache_ttl_seconds
+        self._cache: dict[str, tuple[float, dict]] = {}
+
+    def invalidate(self, project_id: str | None = None) -> None:
+        if project_id is None:
+            self._cache.clear()
+        else:
+            self._cache.pop(project_id, None)
 
     async def get_project(self, project_id: str) -> dict:
+        if self._ttl > 0:
+            hit = self._cache.get(project_id)
+            if hit and hit[0] > time.monotonic():
+                return hit[1]
+        project = await self._fetch_project(project_id)
+        if self._ttl > 0:
+            self._cache[project_id] = (time.monotonic() + self._ttl, project)
+        return project
+
+    async def _fetch_project(self, project_id: str) -> dict:
         url = f"{self._base_url}/ai-gateway/project/api/{project_id}"
         try:
             resp = await self._client.get(url)
@@ -52,6 +77,7 @@ async def open_project_client() -> ProjectClient:
     _client_instance = ProjectClient(
         client=http_client,
         base_url=settings.project_service_url,
+        cache_ttl_seconds=settings.project_cache_ttl_seconds,
     )
     return _client_instance
 

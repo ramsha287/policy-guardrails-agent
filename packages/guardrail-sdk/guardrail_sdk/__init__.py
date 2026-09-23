@@ -1,5 +1,7 @@
 from .api import GuardPayloadIn, GuardrailOutcome, GuardRequest, GuardResponse, PolicyOutcome
+from .client import GuardClient, GuardrailGatewayError
 from .guardrail import EmptyConfig, Guardrail, PluginContext, SecretReader, StateStore
+from .hooks import GuardDefaults, GuardHooks, GuardrailBlocked, SyncGuardClient, SyncGuardHooks
 from .manifest import Capabilities, Manifest, RemoteSpec
 from .models import (
     DECISION_PRECEDENCE,
@@ -27,10 +29,15 @@ __all__ = [
     "EmptyConfig",
     "EnvSecretReader",
     "Finding",
+    "GuardClient",
+    "GuardDefaults",
+    "GuardHooks",
     "GuardPayloadIn",
     "GuardRequest",
     "GuardResponse",
     "Guardrail",
+    "GuardrailBlocked",
+    "GuardrailGatewayError",
     "GuardrailOutcome",
     "GuardrailResult",
     "Manifest",
@@ -45,6 +52,8 @@ __all__ = [
     "SecurityContext",
     "Stage",
     "StateStore",
+    "SyncGuardClient",
+    "SyncGuardHooks",
     "ToolCall",
     "strongest",
 ]

@@ -76,7 +76,14 @@ guardrail conformance --manifest path/to/guardrail.yaml --config config.json [--
 ```
 
 Add unit tests next to the plugin, and a labelled set of at least 200 cases per stage
-(requirement D).
+(requirement D). Measure it with:
+
+```bash
+guardrail evaluate --manifest path/to/guardrail.yaml --config config.json \
+  --dataset eval/datasets/<your-set>.jsonl --min-precision 0.9 --min-recall 0.9
+```
+
+`eval/README.md` describes the dataset format; `eval/generate_pii_dataset.py` is a worked example.
 
 ## 5. Roll it out
 

@@ -1,23 +1,70 @@
 {
-  "version": "staging-2026.09.23-1",
+  "version": "staging-2026.09.23-2",
   "environment": "staging",
   "assignments": [
     {
       "id": "global-ai-gateway-pii",
       "guardrail_id": "ai-gateway-pii",
-      "guardrail_version": "1.0.0",
+      "guardrail_version": "1.1.0",
       "scope_type": "global",
-      "stages": ["input", "output"],
+      "stages": [
+        "input",
+        "retrieval",
+        "tool",
+        "output"
+      ],
       "order": 10,
       "enabled": true,
       "mode": "enforce",
       "failure_mode": "fail_closed",
-      "timeout_ms": 800,
+      "timeout_ms": 1500,
       "config": {
         "project_id": "${AI_GATEWAY_PROJECT_ID}",
         "base_url": "${AI_GATEWAY_URL:-http://instant-redaction-service:8001}",
-        "input": {"on_detect": "modify", "block_entities": ["US_SSN"], "scan_roles": ["user"]},
-        "output": {"on_detect": "modify", "block_entities": ["CREDIT_CARD", "US_SSN"], "scan_roles": ["assistant"]}
+        "input": {
+          "on_detect": "modify",
+          "block_entities": [
+            "US_SSN"
+          ],
+          "scan_roles": [
+            "user"
+          ]
+        },
+        "output": {
+          "on_detect": "modify",
+          "block_entities": [
+            "CREDIT_CARD",
+            "US_SSN"
+          ],
+          "scan_roles": [
+            "assistant"
+          ]
+        },
+        "retrieval": {
+          "on_detect": "modify",
+          "block_entities": [
+            "US_SSN",
+            "CREDIT_CARD"
+          ],
+          "drop_chunk_if_entities_gt": 20
+        },
+        "tool": {
+          "arguments": {
+            "on_detect": "modify",
+            "block_entities": []
+          },
+          "result": {
+            "on_detect": "modify",
+            "block_entities": []
+          },
+          "external_tools": [
+            "http.*",
+            "email.*",
+            "slack.*",
+            "webhook.*"
+          ],
+          "external_on_detect": "block"
+        }
       }
     },
     {
@@ -25,7 +72,12 @@
       "guardrail_id": "noop",
       "guardrail_version": "1.0.0",
       "scope_type": "global",
-      "stages": ["input", "retrieval", "tool", "output"],
+      "stages": [
+        "input",
+        "retrieval",
+        "tool",
+        "output"
+      ],
       "order": 1000,
       "enabled": true,
       "mode": "shadow"

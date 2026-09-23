@@ -1,8 +1,11 @@
+import asyncio
 import json
 import logging
-from io import BytesIO
+import os
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Tuple
+from io import BytesIO
+from typing import Any, Callable, Dict, List, Optional, Tuple, TypeVar
 
 import fitz  # PyMuPDF
 import pandas as pd
@@ -17,9 +20,22 @@ from clients.project_client import ProjectClient
 from enums.file_type import FileType
 from exceptions import InvalidRedactionTypeError
 from utils.common_utils import normalize, normalize_input_for_presidio
-from utils.recognizer_utils import temp_custom_recognizers
 
 logger = logging.getLogger(__name__)
+
+T = TypeVar("T")
+
+# Presidio and spaCy are CPU-bound and synchronous. Running them on the event loop stalls every
+# other request on the worker, so all analysis runs in this bounded pool instead. Custom regex
+# recognizers are passed per call (`ad_hoc_recognizers`) rather than added to the shared
+# registry, so concurrent requests cannot see each other's patterns.
+_ANALYZER_POOL = ThreadPoolExecutor(
+    max_workers=int(os.getenv("ANALYZER_WORKERS", "4")), thread_name_prefix="presidio"
+)
+
+
+async def _run_blocking(fn: Callable[..., T], *args: Any) -> T:
+    return await asyncio.get_running_loop().run_in_executor(_ANALYZER_POOL, fn, *args)
 
 
 _engines: Optional[Tuple[AnalyzerEngine, AnonymizerEngine, ImageRedactorEngine]] = None
@@ -41,6 +57,16 @@ def warmup_engines() -> None:
 
 def engines_ready() -> bool:
     return _engines is not None
+
+
+@dataclass
+class JsonRedactionResult:
+    data: Any
+    findings: List[Dict[str, Any]] = field(default_factory=list)
+
+    @property
+    def redacted(self) -> bool:
+        return bool(self.findings)
 
 
 @dataclass
@@ -126,6 +152,14 @@ class RedactionService:
         return (await self._analyze_and_redact(text, project)).redacted_text
 
     async def _analyze_and_redact(self, text: str, project: dict) -> TextRedactionResult:
+        return await _run_blocking(self._analyze_and_redact_sync, text, project)
+
+    async def redact_texts_detailed(self, texts: List[str], project_id: str) -> List[TextRedactionResult]:
+        """Batch variant: one project lookup, items analysed concurrently in the analyzer pool."""
+        project = await self._get_project(project_id)
+        return list(await asyncio.gather(*(self._analyze_and_redact(t, project) for t in texts)))
+
+    def _analyze_and_redact_sync(self, text: str, project: dict) -> TextRedactionResult:
         logger.info("Redacting text: project=%s len=%d", project.get("id"), len(text))
         text = normalize_input_for_presidio(text)
 
@@ -147,10 +181,14 @@ class RedactionService:
         custom_entity_names = [f"CUSTOM_ENTITY_{i}" for i in range(len(custom_patterns))]
         custom_results = []
         if custom_entity_names:
-            async with temp_custom_recognizers(self.analyzer, recognizers):
-                for r in self.analyzer.analyze(text=text, entities=custom_entity_names, language=self.language):
-                    if not any(i in builtin_spans for i in range(r.start, r.end)):
-                        custom_results.append(r)
+            for r in self.analyzer.analyze(
+                text=text,
+                entities=custom_entity_names,
+                language=self.language,
+                ad_hoc_recognizers=recognizers,
+            ):
+                if not any(i in builtin_spans for i in range(r.start, r.end)):
+                    custom_results.append(r)
 
         results = builtin_results + custom_results
         redacted = self.anonymizer.anonymize(text=text, analyzer_results=results, operators=operator_config)
@@ -204,23 +242,28 @@ class RedactionService:
         entities_to_analyze = list(project.get("entities") or [])
         entities_to_analyze += [f"CUSTOM_ENTITY_{i}" for i in range(len(custom_patterns))]
 
-        pil_image = Image.open(image)
-        if pil_image.mode != "RGB":
-            pil_image = pil_image.convert("RGB")
+        def _redact() -> BytesIO:
+            pil_image = Image.open(image)
+            if pil_image.mode != "RGB":
+                pil_image = pil_image.convert("RGB")
 
-        redacted_image = self.image_redactor.redact(
-            image=pil_image,
-            entities=entities_to_analyze,
-            score_threshold=self.score_threshold,
-            ad_hoc_recognizers=ad_hoc_recognizers or None,
-        )
+            redacted_image = self.image_redactor.redact(
+                image=pil_image,
+                entities=entities_to_analyze,
+                score_threshold=self.score_threshold,
+                ad_hoc_recognizers=ad_hoc_recognizers or None,
+            )
 
-        output = BytesIO()
-        redacted_image.save(output, format="PNG")
-        output.seek(0)
-        return output
+            output = BytesIO()
+            redacted_image.save(output, format="PNG")
+            output.seek(0)
+            return output
 
-    def _redact_pdf_text_on_page(self, page, page_num, pdf_reader, entities_to_analyze, custom_entity_map):
+        return await _run_blocking(_redact)
+
+    def _redact_pdf_text_on_page(
+        self, page, page_num, pdf_reader, entities_to_analyze, custom_entity_map, ad_hoc_recognizers
+    ):
         text = pdf_reader.pages[page_num].extract_text() or ""
         text = normalize_input_for_presidio(text)
         formatted = []
@@ -228,7 +271,12 @@ class RedactionService:
         if not text.strip():
             return formatted
 
-        results = self.analyzer.analyze(text=text, entities=entities_to_analyze, language=self.language)
+        results = self.analyzer.analyze(
+            text=text,
+            entities=entities_to_analyze,
+            language=self.language,
+            ad_hoc_recognizers=ad_hoc_recognizers or None,
+        )
         formatted.extend(self._format_results(results, text, custom_entity_map))
 
         words = page.get_text("words")
@@ -285,41 +333,69 @@ class RedactionService:
         entities_to_analyze = list(entities)
         entities_to_analyze.extend(f"CUSTOM_ENTITY_{i}" for i in range(len(custom_patterns)))
 
-        pdf.seek(0)
-        pdf_document = fitz.open(stream=pdf.getvalue(), filetype="pdf")
-        if len(pdf_document) == 0:
-            pdf_document.close()
+        def _redact() -> BytesIO:
             pdf.seek(0)
-            return pdf
+            pdf_document = fitz.open(stream=pdf.getvalue(), filetype="pdf")
+            if len(pdf_document) == 0:
+                pdf_document.close()
+                pdf.seek(0)
+                return pdf
 
-        pdf.seek(0)
-        with pdfplumber.open(pdf) as pdf_reader:
-            async with temp_custom_recognizers(self.analyzer, ad_hoc_recognizers):
+            pdf.seek(0)
+            with pdfplumber.open(pdf) as pdf_reader:
                 for page_num, page in enumerate(pdf_document):
                     self._redact_pdf_text_on_page(
-                        page, page_num, pdf_reader, entities_to_analyze, custom_entity_map
+                        page, page_num, pdf_reader, entities_to_analyze, custom_entity_map, ad_hoc_recognizers
                     )
                     self._redact_pdf_images_on_page(page, pdf_document, entities_to_analyze, ad_hoc_recognizers)
 
-        output = BytesIO()
-        pdf_document.save(output, garbage=4, deflate=True, clean=True)
-        pdf_document.close()
-        output.seek(0)
-        return output
+            output = BytesIO()
+            pdf_document.save(output, garbage=4, deflate=True, clean=True)
+            pdf_document.close()
+            output.seek(0)
+            return output
+
+        return await _run_blocking(_redact)
 
     async def redact_json(self, json_data: Any, project_id: str) -> Any:
-        project = await self._get_project(project_id)
+        return (await self.redact_json_detailed(json_data, project_id)).data
 
-        async def walk(data: Any) -> Any:
+    async def redact_json_detailed(self, json_data: Any, project_id: str) -> "JsonRedactionResult":
+        """Redact every string value (keys are kept) and report findings per JSON path.
+
+        Paths use `$` for the root, `.key` for object members and `[i]` for array items,
+        e.g. `$.rows[0].email`. Blank strings are left untouched.
+        """
+        project = await self._get_project(project_id)
+        leaves: List[Tuple[str, str]] = []
+
+        def collect(data: Any, path: str) -> None:
             if isinstance(data, str):
-                return await self._redact_text_with_project(data, project)
+                if data.strip():
+                    leaves.append((path, data))
+            elif isinstance(data, dict):
+                for k, v in data.items():
+                    collect(v, f"{path}.{k}")
+            elif isinstance(data, list):
+                for i, item in enumerate(data):
+                    collect(item, f"{path}[{i}]")
+
+        collect(json_data, "$")
+        results = await asyncio.gather(*(self._analyze_and_redact(text, project) for _, text in leaves))
+        replaced = {path: r for (path, _), r in zip(leaves, results)}
+
+        def rebuild(data: Any, path: str) -> Any:
+            if isinstance(data, str):
+                r = replaced.get(path)
+                return r.redacted_text if r is not None and r.redacted else data
             if isinstance(data, dict):
-                return {k: await walk(v) for k, v in data.items()}
+                return {k: rebuild(v, f"{path}.{k}") for k, v in data.items()}
             if isinstance(data, list):
-                return [await walk(item) for item in data]
+                return [rebuild(item, f"{path}[{i}]") for i, item in enumerate(data)]
             return data
 
-        return await walk(json_data)
+        findings = [{**f, "path": path} for path, r in replaced.items() for f in r.findings]
+        return JsonRedactionResult(data=rebuild(json_data, "$"), findings=findings)
 
     async def redact_dataframe(self, dataframe: pd.DataFrame, project_id: str) -> pd.DataFrame:
         project = await self._get_project(project_id)

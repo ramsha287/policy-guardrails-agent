@@ -4,6 +4,7 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -39,6 +40,8 @@ jobs:
           python-version: "3.11"
       - run: pip install -e "packages/guardrail-sdk[test]"
       - run: pytest packages/guardrail-sdk -q
+      - name: Sample agent against a fake gateway (live cases skip here; see e2e job)
+        run: pytest tests/e2e -q
 
   gateway:
     runs-on: ubuntu-latest
@@ -69,6 +72,64 @@ jobs:
         continue-on-error: true
         working-directory: services/guardrail-gateway
         run: mypy app
+
+  ai-gateway:
+    # Real Presidio + spaCy en_core_web_lg; project-service and API keys are faked.
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: services/ai-gateway/instant-redaction-service
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends tesseract-ocr
+      - run: pip install -r requirements-dev.txt && python -m spacy download en_core_web_lg
+      - run: pytest -q
+
+  e2e:
+    # Full docker compose stack + sample agent + evaluation set. Runs on main and on demand.
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    needs: [gateway, ai-gateway]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Start the stack
+        run: |
+          docker compose up --build -d
+          timeout 900 sh -c 'until curl -sf localhost:8100/ready >/dev/null; do sleep 5; done'
+      - run: pip install -e "packages/guardrail-sdk[test]"
+      - name: Sample agent against the live stack
+        run: |
+          export GUARDRAIL_E2E_URL=http://localhost:8100
+          export GUARDRAIL_E2E_KEY=$(docker compose exec -T guardrail-gateway sh -c '. /bootstrap/dev.env; echo $DEMO_GATEWAY_API_KEY')
+          pytest tests/e2e -v
+      - name: Precision / recall on the labelled set (requirement D)
+        # Report-only until the first baseline is recorded; then drop continue-on-error and
+        # set MIN_PRECISION / MIN_RECALL to the agreed thresholds.
+        continue-on-error: true
+        working-directory: services/guardrail-gateway
+        run: |
+          pip install -r requirements.txt
+          eval "$(docker compose exec -T guardrail-gateway cat /bootstrap/dev.env | grep -E '^AI_GATEWAY_(API_KEY|PROJECT_ID)=' | sed 's/^/export /')"
+          PYTHONPATH=. guardrail evaluate \
+            --manifest app/plugins/ai_gateway_pii/guardrail-1.1.0.yaml \
+            --config ../../eval/ai-gateway-pii.config.json \
+            --dataset ../../eval/datasets/pii_v1.jsonl \
+            --min-precision ${MIN_PRECISION:-0.85} --min-recall ${MIN_RECALL:-0.85} \
+            --report ../../eval-report.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: eval-report
+          path: eval-report.json
+      - if: failure()
+        run: docker compose logs --no-color --tail=200
 
   images:
     runs-on: ubuntu-latest

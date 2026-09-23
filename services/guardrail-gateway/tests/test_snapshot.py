@@ -51,7 +51,7 @@ def registry():
 
 
 async def test_discovers_builtin_plugins(registry):
-    assert {"ai-gateway-pii@1.0.0", "noop@1.0.0"} <= set(registry.manifests)
+    assert {"ai-gateway-pii@1.0.0", "ai-gateway-pii@1.1.0", "noop@1.0.0"} <= set(registry.manifests)
 
 
 async def test_compile_dev_snapshot(registry, monkeypatch):
@@ -59,7 +59,8 @@ async def test_compile_dev_snapshot(registry, monkeypatch):
     compiled = await registry.compile_file(SNAP_DIR / "dev.json", "dev")
     ids = [b.manifest.id for b in compiled.resolve("demo", "research-agent", Stage.INPUT)]
     assert ids == ["ai-gateway-pii", "noop"]
-    assert [b.manifest.id for b in compiled.resolve("demo", "a", Stage.RETRIEVAL)] == ["noop"]
+    assert [b.manifest.id for b in compiled.resolve("demo", "a", Stage.RETRIEVAL)] == ["ai-gateway-pii", "noop"]
+    assert all(b.manifest.version == "1.1.0" for b in compiled.bound if b.manifest.id == "ai-gateway-pii")
 
 
 async def test_compile_rejects_bad_snapshots(registry):

@@ -86,8 +86,21 @@ test_pii_obligates_ai_gateway_on_input if {
 	d.obligations == ["ai-gateway-pii"]
 }
 
-test_no_obligation_on_retrieval_yet if {
+test_pii_obligates_ai_gateway_on_retrieval_and_tool if {
 	ctx := object.union(base_context, {"data_classification": "PII"})
-	d := authz.decision with input as mk({"context": ctx, "stage": "retrieval"})
+	d1 := authz.decision with input as mk({"context": ctx, "stage": "retrieval"})
+	d1.obligations == ["ai-gateway-pii"]
+	d2 := authz.decision with input as mk({"context": ctx, "stage": "tool", "tool_name": "database.read"})
+	d2.obligations == ["ai-gateway-pii"]
+}
+
+test_no_obligation_on_agent_stage if {
+	ctx := object.union(base_context, {"data_classification": "PII"})
+	d := authz.decision with input as mk({"context": ctx, "stage": "agent"})
+	d.obligations == []
+}
+
+test_no_obligation_for_internal_data if {
+	d := authz.decision with input as mk({"stage": "retrieval"})
 	d.obligations == []
 }

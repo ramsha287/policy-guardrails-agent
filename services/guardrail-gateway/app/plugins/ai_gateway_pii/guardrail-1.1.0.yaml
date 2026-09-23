@@ -1,0 +1,64 @@
+id: ai-gateway-pii
+version: 1.1.0
+kind: remote
+description: >
+  PII detection and redaction through the existing AI Security Gateway
+  (instant-redaction-service, Presidio) for prompts, retrieved chunks, tool
+  arguments/results and responses. Entities, custom regex patterns and the
+  redaction type come from the ai-gateway project.
+owner: ai-security
+data_handling: >
+  Sends text and tool JSON to the in-cluster instant-redaction-service only. Stores
+  nothing. Returns entity types, offsets, JSON paths and scores, never matched values.
+stages: [input, retrieval, tool, output]
+decisions_emitted: [allow, modify, block]
+failure_mode: fail_closed
+sdk_version: ">=1.0,<2.0"
+latency_budget_ms: 800            # retrieval batch of 20 chunks; text stages target 300
+capabilities:
+  emits_modify: true
+  needs_state: false
+  needs_raw_payload: true
+  parallel_safe: false
+  supports_batch: true
+  max_payload_kb: 1024
+entrypoint: app.plugins.ai_gateway_pii.guardrail:AiGatewayPiiGuardrail
+remote:
+  endpoint: http://instant-redaction-service:8001   # override per assignment with config.base_url
+  auth: api_key
+  api_key_ref: env://AI_GATEWAY_API_KEY
+  timeout_ms: 1500
+config_schema:
+  type: object
+  additionalProperties: false
+  required: [project_id]
+  properties:
+    project_id: {type: string, format: uuid}
+    base_url: {type: string}
+    input: {$ref: "#/$defs/text_stage"}
+    output: {$ref: "#/$defs/text_stage"}
+    retrieval:
+      type: object
+      properties:
+        on_detect: {enum: [modify, block, allow], default: modify}
+        block_entities: {type: array, items: {type: string}, description: chunks containing these are dropped}
+        drop_chunk_if_entities_gt: {type: [integer, "null"], minimum: 0}
+    tool:
+      type: object
+      properties:
+        arguments: {$ref: "#/$defs/tool_part"}
+        result: {$ref: "#/$defs/tool_part"}
+        external_tools: {type: array, items: {type: string}, description: glob patterns for tools that leave the trust boundary}
+        external_on_detect: {enum: [block, modify], default: block}
+  $defs:
+    text_stage:
+      type: object
+      properties:
+        on_detect: {enum: [modify, block, allow], default: modify}
+        block_entities: {type: array, items: {type: string}}
+        scan_roles: {type: array, items: {enum: [system, user, assistant, tool]}}
+    tool_part:
+      type: object
+      properties:
+        on_detect: {enum: [modify, block, allow], default: modify}
+        block_entities: {type: array, items: {type: string}}

@@ -5,31 +5,40 @@ Plug-in guardrails for AI agents with no NeMo dependency. Every request goes thr
 Every decision is written to an append-only audit log.
 
 The first guardrail is the existing **AI Security Gateway** (Presidio PII redaction). It is
-plugged in over HTTP as `ai-gateway-pii`.
+plugged in over HTTP as `ai-gateway-pii` and covers prompts, retrieved chunks, tool arguments
+and results, and responses.
 
-This branch delivers **phases 0–2** of the build plan:
+- Connect an agent: [docs/agent-integration.md](docs/agent-integration.md)
+- Add a guardrail: [docs/adding-a-guardrail.md](docs/adding-a-guardrail.md)
+- Measure one: [eval/README.md](eval/README.md)
+
+Phases 0–3 of the build plan are done:
 
 | Phase | Status | What's in it |
 | --- | --- | --- |
 | 0. Foundations | Done | Monorepo, `guardrail-sdk`, CI, Docker Compose with Postgres, Redis and OPA |
 | 1. Gateway + engine core | Done | `/v1/guard/{stage}`, auth, normalization, context and scoring, OPA with Rego, pipeline, audit |
 | 2. ai-gateway adapter | Done | `ai-gateway-pii@1.0.0` for input and output; ai-gateway changes 1, 4, 6, 7, 10 |
-| 3. Retrieval + tool stages | Next | ai-gateway `/text/batch`, `/json`, project cache; agent SDK hooks |
-| 4. Control plane | Planned | Registry API, snapshots, versioning, review queue, RBAC |
+| 3. Retrieval + tool stages | Done | `ai-gateway-pii@1.1.0` on all four stages, ai-gateway changes 2, 3, 5 plus the Presidio thread pool, agent hooks (plain Python, LangGraph, CrewAI), sample agent, 880-case evaluation set |
+| 4. Control plane | Next | Registry API, snapshots, versioning, review queue, RBAC |
 | 5. Hardening | Planned | mTLS, SOPS, dashboards, review UI, k3s Helm charts |
 
 ## Repository layout
 
 ```text
-packages/guardrail-sdk/           contracts, Guardrail base class, manifest, conformance suite, agent client
+packages/guardrail-sdk/           contracts, Guardrail base class, manifest, conformance + evaluation, agent client and hooks
+  guardrail_sdk/integrations/     guard_tool, LangGraph nodes/retriever, CrewAI tool/inputs/output
 services/guardrail-gateway/       :8100  gateway + context builder + OPA client + engine + audit
-  app/plugins/ai_gateway_pii/     first guardrail (remote adapter to instant-redaction-service)
+  app/plugins/ai_gateway_pii/     first guardrail: 1.0.0 (input/output), 1.1.0 (all four stages)
   app/plugins/noop/               reference local guardrail / template
   config/snapshots/<env>.json     which guardrails run where (control plane replaces this in phase 4)
   alembic/                        guardrail + audit schemas (own version table in `guardrail`)
 services/ai-gateway/              existing PII redaction platform (project-service :8000, instant-redaction :8001)
 policies/guardrails/              Rego authorization policy + tests
-docs/                             ai-gateway change spec, guide to adding guardrails
+examples/sample_agent/            framework-free agent using all four stages
+eval/                             labelled PII dataset (880 cases) + generator + eval config
+tests/e2e/                        sample agent against a fake gateway and the live stack
+docs/                             agent integration, adding guardrails, ai-gateway change spec
 ```
 
 ## Run it
@@ -54,21 +63,27 @@ curl -s localhost:8100/v1/guard/input -H "X-API-Key: $KEY" -H 'content-type: app
 ```
 
 With the dev snapshot you get `decision: "modify"`, and the email and employee ID come back
-redacted. A US SSN on input returns `block`.
+redacted. A US SSN on input returns `block`. On the retrieval stage, chunks with an SSN or card
+number are dropped. On the tool stage, PII sent to `http.*`, `email.*`, `slack.*` or `webhook.*`
+tools is blocked, and PII in tool results is redacted.
 
 ## From an agent
 
 ```python
-from guardrail_sdk.client import GuardClient
+from guardrail_sdk import GuardClient, GuardHooks, GuardrailBlocked
 
-async with GuardClient("http://guardrail-gateway:8100", api_key, agent_id="research-agent") as guard:
-    r = await guard.check_input(user_text, user_id=user_id, data_classification="PII")
-    if not r.allowed:
-        return f"Request blocked: {r.reason}"
-    answer = await llm(r.payload.text)
-    out = await guard.check_output(answer, user_id=user_id, data_classification="PII")
-    return out.payload.text if out.allowed else "Sorry, I can't share that."
+async with GuardClient("http://guardrail-gateway:8100", api_key, agent_id="research-agent") as client:
+    hooks = GuardHooks(client, user_id=user_id, data_classification="PII")
+    try:
+        prompt = await hooks.before_llm(user_text)            # input
+        chunks = await hooks.on_retrieval(search(prompt))     # retrieval
+        answer = await hooks.after_llm(await llm(prompt, chunks))   # output
+    except GuardrailBlocked as exc:
+        answer = f"Request blocked: {exc.reason}"
 ```
+
+Tools are wrapped with `guard_tool` (tool stage, before and after the call). LangGraph and CrewAI
+adapters are described in [docs/agent-integration.md](docs/agent-integration.md).
 
 ## API
 
@@ -92,7 +107,7 @@ Ops endpoints: `GET /health`, `GET /ready`, `GET /version`, `GET /metrics` (Prom
   using `guardrail.action_catalog` and `guardrail.score_modifiers`. An unknown action gets 100.
 - Both scores go to OPA. The starter policy denies trust below 50 or risk above 70 in
   production, delegation chains deeper than 3, and tools not on the agent's list. It also
-  requires `ai-gateway-pii` on input and output for `PII` or `CONFIDENTIAL` data.
+  requires `ai-gateway-pii` on input, retrieval, tool and output for `PII` or `CONFIDENTIAL` data.
 
 Manage the catalog with `python -m app.cli` (see `services/guardrail-gateway/app/cli.py`) until the control plane ships.
 
@@ -107,7 +122,7 @@ Manage the catalog with `python -m app.cli` (see `services/guardrail-gateway/app
 - ESCALATE is returned as BLOCK until the human review queue ships.
 - OPA obligations are only satisfied by **enforced** guardrails. While production runs
   `ai-gateway-pii` in shadow mode, requests marked `PII` or `CONFIDENTIAL` are blocked on
-  input and output. Switch the assignment to `enforce` once the shadow review is done.
+  input, retrieval, tool and output. Switch the assignment to `enforce` once the shadow review is done.
 
 ## Audit
 
@@ -121,8 +136,11 @@ text is never stored.**
 ```bash
 pip install -e "packages/guardrail-sdk[test]" -r services/guardrail-gateway/requirements-dev.txt
 pytest packages/guardrail-sdk
+pytest tests/e2e                                   # add GUARDRAIL_E2E_URL/KEY for the live cases
 cd services/guardrail-gateway && POSTGRES_TEST_DSN=postgresql+asyncpg://gateway:gateway@localhost/gateway_test pytest
 opa test policies
+# ai-gateway with real Presidio (needs en_core_web_lg):
+cd services/ai-gateway/instant-redaction-service && pip install -r requirements-dev.txt && pytest
 ```
 
 ## Deployment notes (k3s)

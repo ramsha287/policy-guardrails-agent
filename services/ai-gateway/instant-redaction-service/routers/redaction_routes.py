@@ -13,6 +13,13 @@ from dependencies import (
 )
 from enums.file_type import FileType
 from exceptions import ServiceUnavailableError
+from schemas.batch_schema import (
+    BatchResult,
+    JsonRedactionRequest,
+    JsonRedactionResponse,
+    TextBatchRequest,
+    TextBatchResponse,
+)
 from schemas.error_schema import ErrorResponse
 from schemas.text_schema import TextRedactionRequest, TextRedactionResponse
 from services.redaction_service import RedactionService, engines_ready
@@ -20,7 +27,7 @@ from utils.file_utils import FileTypeDetector, FileValidator
 
 router = APIRouter()
 
-SERVICE_VERSION = "1.1.0"
+SERVICE_VERSION = "1.2.0"
 
 _MEDIA_TYPE_MAP = {
     FileType.IMAGE: "image/png",
@@ -53,7 +60,7 @@ async def version():
     return {
         "service": "instant-redaction-service",
         "version": SERVICE_VERSION,
-        "features": ["text.include_findings", "ready"],
+        "features": ["text.include_findings", "text.batch", "json", "ready"],
     }
 
 
@@ -85,6 +92,55 @@ async def redact_text_endpoint(
         redacted=result.redacted,
         findings=result.findings,
         offsets_basis="normalized_text",
+    )
+
+
+@router.post(
+    "/text/batch",
+    response_model=TextBatchResponse,
+    responses={
+        400: {"model": ErrorResponse, "description": "Validation error"},
+        401: {"model": ErrorResponse, "description": "Missing or invalid API key"},
+        404: {"model": ErrorResponse, "description": "Project not found"},
+    },
+)
+async def redact_text_batch_endpoint(
+    request: TextBatchRequest,
+    api_key: ValidatedApiKey = Depends(require_api_key),
+    service: RedactionService = Depends(get_redaction_service),
+):
+    """Redact up to 100 texts in one call (retrieval chunks). Always returns findings."""
+    results = await service.redact_texts_detailed([i.text for i in request.items], request.project_id)
+    return TextBatchResponse(
+        results=[
+            BatchResult(id=item.id, redacted_text=r.redacted_text, redacted=r.redacted, findings=r.findings)
+            for item, r in zip(request.items, results)
+        ]
+    )
+
+
+@router.post(
+    "/json",
+    response_model=JsonRedactionResponse,
+    response_model_exclude_none=True,
+    responses={
+        400: {"model": ErrorResponse, "description": "Validation error"},
+        401: {"model": ErrorResponse, "description": "Missing or invalid API key"},
+        404: {"model": ErrorResponse, "description": "Project not found"},
+    },
+)
+async def redact_json_endpoint(
+    request: JsonRedactionRequest,
+    include_findings: bool = Query(False, description="Also return findings with their JSON path"),
+    api_key: ValidatedApiKey = Depends(require_api_key),
+    service: RedactionService = Depends(get_redaction_service),
+):
+    """Redact every string value in a JSON document (tool arguments and results). Keys are kept."""
+    result = await service.redact_json_detailed(request.data, request.project_id)
+    if not include_findings:
+        return JsonRedactionResponse(data=result.data, redacted=result.redacted)
+    return JsonRedactionResponse(
+        data=result.data, redacted=result.redacted, findings=result.findings, offsets_basis="normalized_text"
     )
 
 

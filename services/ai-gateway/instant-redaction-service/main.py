@@ -1,3 +1,4 @@
+import asyncio
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -5,6 +6,7 @@ from fastapi.exceptions import HTTPException, RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 
 from clients.project_client import close_project_client, open_project_client
+from utils.project_events import listen_for_project_changes
 from config import get_settings
 from exceptions import BaseError
 from exceptions.exception_handlers import (
@@ -25,11 +27,18 @@ setup_logging(settings.log_level)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    await open_project_client()
+    project_client = await open_project_client()
     warmup_engines()
+    listener = None
+    if settings.redis_url:
+        listener = asyncio.create_task(
+            listen_for_project_changes(settings.redis_url, project_client.invalidate)
+        )
     try:
         yield
     finally:
+        if listener is not None:
+            listener.cancel()
         await close_project_client()
 
 

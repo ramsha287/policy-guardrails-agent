@@ -9,6 +9,7 @@ from exceptions import (
 from mappers.project_mapper import map_list_to_responses, map_to_project_response
 from models.project_model import Project
 from repositories.project_repository import ProjectRepository
+from utils.events import publish_project_changed
 from schemas.project_schema import (
     CreatedResponse,
     MessageResponse,
@@ -80,6 +81,7 @@ class ProjectService:
             raise ValidationError("At least one of 'entities' or 'customized' must be non-empty")
 
         await self.repo.update(project, changes)
+        await publish_project_changed(project_id)
         logger.info("Project updated: id=%s", project_id)
         return MessageResponse(message="Project updated successfully")
 
@@ -88,5 +90,6 @@ class ProjectService:
         if project is None:
             raise ProjectNotFoundError(project_id)
         await self.repo.delete(project)
+        await publish_project_changed(project_id)
         logger.info("Project deleted: id=%s", project_id)
         return MessageResponse(message="Project deleted successfully")
