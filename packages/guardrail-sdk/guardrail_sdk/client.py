@@ -12,11 +12,13 @@ async with GuardClient("http://guardrail-gateway:8100", api_key, agent_id="resea
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 import httpx
 
 from .api import GuardPayloadIn, GuardRequest, GuardResponse
+from .documents import EscalationStatus
 from .models import Chunk, Message, Stage, ToolCall
 
 
@@ -83,6 +85,27 @@ class GuardClient:
             except ValueError:
                 pass
         raise GuardrailGatewayError(resp.status_code, resp.text[:500])
+
+    async def get_escalation(self, escalation_id: str) -> EscalationStatus:
+        try:
+            resp = await self._http.get(f"{self._base}/v1/escalations/{escalation_id}", headers=self._headers)
+        except httpx.HTTPError as exc:
+            raise GuardrailGatewayError(None, f"guardrail gateway unreachable: {exc}") from exc
+        if resp.status_code != 200:
+            raise GuardrailGatewayError(resp.status_code, resp.text[:500])
+        return EscalationStatus.model_validate(resp.json())
+
+    async def wait_for_escalation(
+        self, escalation_id: str, *, timeout_seconds: float = 300.0, poll_seconds: float = 2.0
+    ) -> EscalationStatus:
+        """Poll until a reviewer decides or the review expires. On local timeout returns the pending status."""
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + timeout_seconds
+        while True:
+            status = await self.get_escalation(escalation_id)
+            if status.status != "pending" or loop.time() >= deadline:
+                return status
+            await asyncio.sleep(min(poll_seconds, max(0.0, deadline - loop.time())))
 
     async def check_input(self, text: str, *, action: str = "llm.chat", **fields: Any) -> GuardResponse:
         return await self.guard(Stage.INPUT, GuardPayloadIn(text=text), action=action, **fields)

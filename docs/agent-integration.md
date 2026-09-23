@@ -18,7 +18,7 @@ pip install -e packages/guardrail-sdk      # PyPI package later
 ## Plain Python (async)
 
 ```python
-from guardrail_sdk import GuardClient, GuardHooks, GuardrailBlocked
+from guardrail_sdk import GuardClient, GuardHooks, GuardrailBlocked, GuardrailEscalated
 
 async with GuardClient("http://guardrail-gateway:8100", api_key, agent_id="research-agent") as client:
     hooks = GuardHooks(client, data_classification="PII")
@@ -32,6 +32,22 @@ async with GuardClient("http://guardrail-gateway:8100", api_key, agent_id="resea
 ```
 
 Synchronous code uses `SyncGuardClient` and `SyncGuardHooks`, which have the same methods.
+
+### Human review (ESCALATE)
+
+When a guardrail escalates, the gateway holds the step for a reviewer and returns 202. By default the
+hooks raise `GuardrailEscalated` (a subclass of `GuardrailBlocked`) straight away, so existing
+`except GuardrailBlocked` code treats it as a block. To wait for the reviewer instead:
+
+```python
+hooks = GuardHooks(client, data_classification="PII", wait_for_review_seconds=60)
+try:
+    answer = await hooks.after_llm(draft)        # returns the approved payload
+except GuardrailEscalated as exc:                # still pending after 60 s
+    queue_for_later(exc.escalation_id)           # later: await client.wait_for_escalation(id, ...)
+except GuardrailBlocked:                         # rejected or expired
+    answer = "Sorry, I can't help with that."
+```
 
 ## Tools (any framework)
 

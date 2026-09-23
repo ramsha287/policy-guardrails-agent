@@ -13,7 +13,9 @@ RUN pip install /tmp/guardrail-sdk -r /tmp/requirements.txt && rm -rf /tmp/guard
 
 COPY services/guardrail-gateway/ /app/
 
-RUN useradd --uid 10001 --no-create-home app && mkdir -p /bootstrap && chown -R app /app /bootstrap
+RUN useradd --uid 10001 --no-create-home app \
+    && mkdir -p /bootstrap /var/cache/guardrail-gateway \
+    && chown -R app /app /bootstrap /var/cache/guardrail-gateway
 USER app
 
 EXPOSE 8100

@@ -10,7 +10,8 @@ from app.audit.writer import AuditSink
 from app.config import Settings
 from app.context.builder import ContextBuilder
 from app.engine.pipeline import GuardrailEngine
-from app.engine.registry import CompiledSnapshot
+from app.engine.registry import CompiledSnapshot, PluginRegistry
+from app.engine.remote import ControlPlaneClient
 from app.gateway.auth import Authenticator
 from app.policy.opa import PolicyEngine
 
@@ -34,3 +35,7 @@ class Services:
     audit: AuditSink
     # name -> async check returning True when healthy (used by /ready)
     readiness: dict[str, Callable[[], Awaitable[bool]]] = field(default_factory=dict)
+    # For /internal/simulate (compiles draft snapshots with the installed plugins)
+    registry: PluginRegistry | None = None
+    # CONFIG_SOURCE=control_plane only: review queue + internal token for /internal/*
+    control_plane: ControlPlaneClient | None = None

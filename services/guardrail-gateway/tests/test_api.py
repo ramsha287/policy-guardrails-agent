@@ -189,3 +189,133 @@ async def test_block_from_guardrail_is_200_with_no_payload():
         r = await client.post("/v1/guard/input", json=BODY, headers={"X-API-Key": KEY})
     assert r.status_code == 200
     assert r.json()["decision"] == "block" and r.json()["payload"] is None and r.json()["risk_score"] == 90
+
+
+# ---- control-plane mode: escalation + simulate -----------------------------------------------
+
+from app.config import APP_DIR  # noqa: E402
+from app.engine.registry import PluginRegistry  # noqa: E402
+from app.engine.remote import ControlPlaneClient  # noqa: E402
+from guardrail_sdk import EnvSecretReader, PluginContext  # noqa: E402
+from tests.helpers import result  # noqa: E402
+
+TOKEN = "internal-token-0123456789"
+
+
+def cp_client(handler):
+    return ControlPlaneClient(httpx.AsyncClient(transport=httpx.MockTransport(handler)), "http://cp", TOKEN)
+
+
+def cp_mode_client(cp_handler, snap=None):
+    settings = Settings(postgres_dsn="postgresql+asyncpg://unused/db", internal_token=TOKEN)
+    registry = PluginRegistry([APP_DIR / "plugins"], PluginContext(http=httpx.AsyncClient(), secrets=EnvSecretReader()))
+    registry.discover()
+    services = Services(
+        settings=settings,
+        auth=Authenticator(Keys()),
+        contexts=ContextBuilder(CachedCatalog(Catalog()), "dev"),
+        policy=Policy(),
+        engine=GuardrailEngine(escalate_as_block=False),
+        snapshots=Snapshots(snap or snapshot(bind("human-check", result("escalate", "needs a human", 70)))),
+        audit=Audit(),
+        registry=registry,
+        control_plane=cp_client(cp_handler),
+    )
+    app = create_app(settings, services)
+    return httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://gw"), services
+
+
+def fake_cp(status="approved"):
+    held = {}
+
+    def handler(request):
+        if request.method == "POST":
+            held["payload"] = json.loads(request.content)["payload"]
+            return httpx.Response(201, json={"escalation_id": "rev-1", "expires_at": "x"})
+        return httpx.Response(
+            200,
+            json={
+                "escalation_id": "rev-1",
+                "status": status,
+                "decision": {"approved": "allow", "pending": "escalate"}.get(status, "block"),
+                "reason": status,
+                "payload": held.get("payload") if status == "approved" else None,
+            },
+        )
+
+    return handler
+
+
+async def test_escalation_is_202_then_released_after_approval():
+    client, svc = cp_mode_client(fake_cp("approved"))
+    async with client:
+        r = await client.post("/v1/guard/input", json=BODY, headers={"X-API-Key": KEY})
+        assert r.status_code == 202, r.text
+        body = r.json()
+        assert body["decision"] == "escalate" and body["escalation_id"] == "rev-1" and body["payload"] is None
+        s = await client.get("/v1/escalations/rev-1", headers={"X-API-Key": KEY})
+    assert s.status_code == 200
+    status = s.json()
+    assert status["decision"] == "allow" and status["payload"]["text"] == "email jane@example.com"
+    assert "stage" not in status["payload"]
+    assert svc.audit.events[0]["decision"] == "escalate" and "rev-1" in svc.audit.events[0]["reason"]
+
+
+async def test_escalation_blocks_when_review_queue_down():
+    def down(request):
+        raise httpx.ConnectError("down")
+
+    client, _ = cp_mode_client(down)
+    async with client:
+        r = await client.post("/v1/guard/input", json=BODY, headers={"X-API-Key": KEY})
+    assert r.status_code == 200 and r.json()["decision"] == "block" and "unavailable" in r.json()["reason"]
+
+
+async def test_escalation_status_requires_key_and_file_mode_404():
+    client, _ = cp_mode_client(fake_cp("pending"))
+    async with client:
+        assert (await client.get("/v1/escalations/rev-1")).status_code == 401
+        pending = (await client.get("/v1/escalations/rev-1", headers={"X-API-Key": KEY})).json()
+    assert pending["decision"] == "escalate" and pending["payload"] is None
+    file_client, _ = make_client()
+    async with file_client:
+        assert (await file_client.get("/v1/escalations/x", headers={"X-API-Key": KEY})).status_code == 404
+
+
+async def test_internal_simulate():
+    client, svc = cp_mode_client(fake_cp())
+    body = {
+        "snapshot": {
+            "version": "draft",
+            "environment": "dev",
+            "assignments": [
+                {
+                    "id": "n",
+                    "guardrail_id": "noop",
+                    "guardrail_version": "1.0.0",
+                    "stages": ["input"],
+                    "mode": "enforce",
+                }
+            ],
+        },
+        "catalog": None,
+        "tenant_id": "demo",
+        "stage": "input",
+        "request": BODY,
+    }
+    async with client:
+        assert (await client.post("/internal/simulate", json=body)).status_code == 401
+        r = await client.post("/internal/simulate", json=body, headers={"X-Internal-Token": TOKEN})
+        bad = {
+            **body,
+            "snapshot": {
+                **body["snapshot"],
+                "assignments": [{**body["snapshot"]["assignments"][0], "guardrail_version": "9.9.9"}],
+            },
+        }
+        r_bad = await client.post("/internal/simulate", json=bad, headers={"X-Internal-Token": TOKEN})
+    assert r.status_code == 200, r.text
+    out = r.json()
+    assert out["simulated"] is True and out["decision"] == "allow" and out["results"][0]["guardrail_id"] == "noop"
+    assert r_bad.status_code == 422
+    assert svc.audit.events == []  # simulations are never audited

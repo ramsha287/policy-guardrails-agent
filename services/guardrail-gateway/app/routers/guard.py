@@ -2,6 +2,7 @@
 
 Status codes:
   200  decision allow | modify | block (guardrail block)
+  202  decision escalate: held for human review; poll GET /v1/escalations/{escalation_id}
   403  decision block because OPA denied the request
   401  missing/invalid API key     422  invalid body     503  no guardrail snapshot loaded
 """
@@ -15,12 +16,21 @@ from fastapi.responses import JSONResponse
 from pydantic import ValidationError
 
 from app.audit.writer import payload_digest
+from app.engine.escalation import hold_for_review
 from app.engine.pipeline import StageOutcome
 from app.gateway.middleware import request_id_var, trace_id_var
 from app.gateway.normalize import normalize_payload
 from app.observability import OPA_DENY, REQUEST_LATENCY, REQUESTS, span
 from app.services import Services
-from guardrail_sdk import Decision, GuardPayloadIn, GuardRequest, GuardResponse, Payload, PolicyOutcome, Stage
+from guardrail_sdk import (
+    Decision,
+    GuardPayloadIn,
+    GuardRequest,
+    GuardResponse,
+    Payload,
+    PolicyOutcome,
+    Stage,
+)
 
 router = APIRouter(tags=["guard"])
 
@@ -32,7 +42,7 @@ def _error(status: int, message: str) -> JSONResponse:
 @router.post(
     "/v1/guard/{stage}",
     response_model=GuardResponse,
-    responses={401: {}, 403: {"model": GuardResponse}, 422: {}, 503: {}},
+    responses={202: {"model": GuardResponse}, 401: {}, 403: {"model": GuardResponse}, 422: {}, 503: {}},
 )
 async def guard(
     stage: Stage,
@@ -76,10 +86,14 @@ async def guard(
             outcome = await svc.engine.run(snapshot, stage, ctx, payload, policy.obligations)
             status = 200
 
+    escalation_id: str | None = None
+    if outcome.decision == Decision.ESCALATE:
+        outcome, escalation_id = await hold_for_review(svc.control_plane, ctx, stage, outcome)
+        status = 202 if escalation_id else 200
+
     latency_ms = round((time.perf_counter() - started) * 1000, 2)
-    out_payload = (
-        GuardPayloadIn.model_validate(outcome.payload.model_dump(exclude={"stage"})) if outcome.payload else None
-    )
+    released = outcome.payload if outcome.decision in (Decision.ALLOW, Decision.MODIFY) else None
+    out_payload = GuardPayloadIn.model_validate(released.model_dump(exclude={"stage"})) if released else None
     response = GuardResponse(
         request_id=request_id,
         trace_id=trace_id,
@@ -92,6 +106,7 @@ async def guard(
         policy=PolicyOutcome(allow=policy.allow, reason=policy.reason, obligations=policy.obligations),
         results=outcome.results,
         snapshot_version=snapshot.version,
+        escalation_id=escalation_id,
     )
 
     svc.audit.submit(
@@ -107,7 +122,7 @@ async def guard(
             "action": ctx.action,
             "resource": ctx.resource,
             "decision": outcome.decision.value,
-            "reason": outcome.reason,
+            "reason": outcome.reason + (f" [escalation {escalation_id}]" if escalation_id else ""),
             "risk_score": response.risk_score,
             "trust_score": ctx.trust_score,
             "policy_allow": policy.allow,

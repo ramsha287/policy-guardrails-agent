@@ -31,10 +31,34 @@ def _redact(value: Any) -> tuple[Any, bool]:
 
 
 class FakeGateway:
-    def __init__(self) -> None:
+    """ESCALATEME in the payload -> 202 escalation; `review_outcomes` is the sequence of statuses
+    GET /v1/escalations/{id} returns (last one repeats)."""
+
+    def __init__(self, review_outcomes: list[str] | None = None) -> None:
         self.requests: list[dict[str, Any]] = []
+        self.review_outcomes = review_outcomes or ["pending"]
+        self.polls = 0
+        self.held: dict[str, Any] = {}
+
+    def _escalation(self, escalation_id: str) -> httpx.Response:
+        status = self.review_outcomes[min(self.polls, len(self.review_outcomes) - 1)]
+        self.polls += 1
+        decision = {"pending": "escalate", "approved": "allow"}.get(status, "block")
+        return httpx.Response(
+            200,
+            json={
+                "escalation_id": escalation_id,
+                "status": status,
+                "decision": decision,
+                "reason": f"{status} by reviewer",
+                "reviewer": "rev" if status in ("approved", "rejected") else None,
+                "payload": self.held.get(escalation_id) if status == "approved" else None,
+            },
+        )
 
     def __call__(self, request: httpx.Request) -> httpx.Response:
+        if request.method == "GET" and "/v1/escalations/" in request.url.path:
+            return self._escalation(request.url.path.rsplit("/", 1)[-1])
         body = json.loads(request.content)
         stage = request.url.path.rsplit("/", 1)[-1]
         self.requests.append({"stage": stage, **body})
@@ -58,6 +82,18 @@ class FakeGateway:
                 "policy": {"allow": False, "reason": "not allowed", "obligations": []},
             }
             return httpx.Response(403, json=deny)
+        if "ESCALATEME" in json.dumps(payload):
+            self.held["esc-1"] = payload
+            return httpx.Response(
+                202,
+                json={
+                    **base,
+                    "decision": "escalate",
+                    "reason": "needs review",
+                    "payload": None,
+                    "escalation_id": "esc-1",
+                },
+            )
         if "BLOCKME" in json.dumps(payload):
             return httpx.Response(200, json={**base, "decision": "block", "reason": "blocked", "payload": None})
         if stage == "retrieval":

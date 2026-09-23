@@ -126,7 +126,9 @@ async def bootstrap_dev(sm: async_sessionmaker[AsyncSession], out: Path, project
     base = project_service_url.rstrip("/")
     async with httpx.AsyncClient(timeout=10) as http:
         project_id = await _ai_gateway_project(http, base)
-        key_resp = await http.post(f"{base}/ai-gateway/apikeys/api/", json={"name": "guardrail-engine"})
+        key_resp = await http.post(
+            f"{base}/ai-gateway/apikeys/api/", json={"name": "guardrail-engine", "scope": "service"}
+        )
         key_resp.raise_for_status()
         ai_gateway_key = key_resp.json()["key"]
 

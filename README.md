@@ -10,9 +10,10 @@ and results, and responses.
 
 - Connect an agent: [docs/agent-integration.md](docs/agent-integration.md)
 - Add a guardrail: [docs/adding-a-guardrail.md](docs/adding-a-guardrail.md)
+- Manage guardrails, tenants and reviews: [docs/control-plane.md](docs/control-plane.md)
 - Measure one: [eval/README.md](eval/README.md)
 
-Phases 0–3 of the build plan are done:
+Phases 0–4 of the build plan are done:
 
 | Phase | Status | What's in it |
 | --- | --- | --- |
@@ -20,8 +21,8 @@ Phases 0–3 of the build plan are done:
 | 1. Gateway + engine core | Done | `/v1/guard/{stage}`, auth, normalization, context and scoring, OPA with Rego, pipeline, audit |
 | 2. ai-gateway adapter | Done | `ai-gateway-pii@1.0.0` for input and output; ai-gateway changes 1, 4, 6, 7, 10 |
 | 3. Retrieval + tool stages | Done | `ai-gateway-pii@1.1.0` on all four stages, ai-gateway changes 2, 3, 5 plus the Presidio thread pool, agent hooks (plain Python, LangGraph, CrewAI), sample agent, 880-case evaluation set |
-| 4. Control plane | Next | Registry API, snapshots, versioning, review queue, RBAC |
-| 5. Hardening | Planned | mTLS, SOPS, dashboards, review UI, k3s Helm charts |
+| 4. Control plane | Done | `guardrail-control-plane` (:8200): guardrail registry, versioned snapshots with two-person approval and rollback, tenant catalog, human review queue for ESCALATE, RBAC with tenant-scoped keys, simulate; gateways sync without redeploy; ai-gateway changes 8, 9 |
+| 5. Hardening | Next | mTLS, SOPS, dashboards, review UI, k3s Helm charts |
 
 ## Repository layout
 
@@ -31,8 +32,9 @@ packages/guardrail-sdk/           contracts, Guardrail base class, manifest, con
 services/guardrail-gateway/       :8100  gateway + context builder + OPA client + engine + audit
   app/plugins/ai_gateway_pii/     first guardrail: 1.0.0 (input/output), 1.1.0 (all four stages)
   app/plugins/noop/               reference local guardrail / template
-  config/snapshots/<env>.json     which guardrails run where (control plane replaces this in phase 4)
+  config/snapshots/<env>.json     which guardrails run where with CONFIG_SOURCE=file (seed for the control plane)
   alembic/                        guardrail + audit schemas (own version table in `guardrail`)
+services/guardrail-control-plane/ :8200  registry, snapshots, catalog, review queue, RBAC (schema `control`)
 services/ai-gateway/              existing PII redaction platform (project-service :8000, instant-redaction :8001)
 policies/guardrails/              Rego authorization policy + tests
 examples/sample_agent/            framework-free agent using all four stages
@@ -46,12 +48,18 @@ docs/                             agent integration, adding guardrails, ai-gatew
 ```bash
 docker compose up --build
 docker compose exec guardrail-gateway cat /bootstrap/dev.env   # DEMO_GATEWAY_API_KEY=gk_...
+docker compose exec guardrail-control-plane cat /bootstrap/cp.env   # CP_ADMIN_KEY, CP_APPROVER_KEY
 ```
 
 The one-shot `guardrail-bootstrap` container does three things. It runs the migrations, and
 it seeds a `demo` tenant with agents, an action catalog and score modifiers. It also creates
 a redaction project and a service API key in ai-gateway's project-service. It writes the
 generated keys to the `bootstrap` volume, and the gateway reads them from there at start-up.
+
+In Compose the gateway runs with `CONFIG_SOURCE=control_plane`. On the first run the control plane
+imports the seeded tenant and `config/snapshots/*.json`, and from then on it is the source of truth.
+Change guardrails, keys and scores through its API ([docs/control-plane.md](docs/control-plane.md)),
+not the snapshot files. Production publishes need a second admin key to approve.
 
 ```bash
 KEY=gk_...   # from dev.env
@@ -94,6 +102,7 @@ comes from the gateway's configuration.
 | Status | Meaning |
 | --- | --- |
 | 200 | `decision` is `allow`, `modify` (use the returned `payload`) or `block` (a guardrail blocked) |
+| 202 | `decision` is `escalate`: the payload is held for human review. Poll `GET /v1/escalations/{escalation_id}` |
 | 403 | `decision` is `block` because OPA denied the request (`policy.reason`) |
 | 401 / 422 / 413 | Bad key / invalid body / body over 1 MB |
 | 503 | No guardrail snapshot is loaded (fail-closed) |
@@ -109,7 +118,8 @@ Ops endpoints: `GET /health`, `GET /ready`, `GET /version`, `GET /metrics` (Prom
   production, delegation chains deeper than 3, and tools not on the agent's list. It also
   requires `ai-gateway-pii` on input, retrieval, tool and output for `PII` or `CONFIDENTIAL` data.
 
-Manage the catalog with `python -m app.cli` (see `services/guardrail-gateway/app/cli.py`) until the control plane ships.
+Manage the catalog through the control plane (`/cp/v1/tenants/...`). Changes reach gateways within
+seconds. With `CONFIG_SOURCE=file`, use `python -m app.cli` in the gateway instead.
 
 ## Engine rules
 
@@ -119,7 +129,9 @@ Manage the catalog with `python -m app.cli` (see `services/guardrail-gateway/app
 - Errors and time-outs follow `failure_mode`. **`fail_closed` (BLOCK) is used in every
   environment**, so failures show up during testing too.
 - `shadow` assignments run and are audited but never change the outcome.
-- ESCALATE is returned as BLOCK until the human review queue ships.
+- ESCALATE holds the payload in the control plane's review queue and returns 202. Approval releases
+  it. Rejection, expiry (15 min) or an unreachable queue results in BLOCK. With `CONFIG_SOURCE=file`
+  there is no queue, so ESCALATE is returned as BLOCK. The review UI is phase 5.
 - OPA obligations are only satisfied by **enforced** guardrails. While production runs
   `ai-gateway-pii` in shadow mode, requests marked `PII` or `CONFIDENTIAL` are blocked on
   input, retrieval, tool and output. Switch the assignment to `enforce` once the shadow review is done.
@@ -138,6 +150,9 @@ pip install -e "packages/guardrail-sdk[test]" -r services/guardrail-gateway/requ
 pytest packages/guardrail-sdk
 pytest tests/e2e                                   # add GUARDRAIL_E2E_URL/KEY for the live cases
 cd services/guardrail-gateway && POSTGRES_TEST_DSN=postgresql+asyncpg://gateway:gateway@localhost/gateway_test pytest
+cd services/guardrail-control-plane && pip install -r requirements-dev.txt && \
+  POSTGRES_TEST_DSN=postgresql+asyncpg://gateway:gateway@localhost/cp_test pytest   # every flow on memory + Postgres
+pytest tests/e2e/test_control_plane.py           # live: CONTROL_PLANE_E2E_URL, CP_E2E_ADMIN_KEY
 opa test policies
 # ai-gateway with real Presidio (needs en_core_web_lg):
 cd services/ai-gateway/instant-redaction-service && pip install -r requirements-dev.txt && pytest
@@ -146,6 +161,7 @@ cd services/ai-gateway/instant-redaction-service && pip install -r requirements-
 ## Deployment notes (k3s)
 
 Images are plain multi-arch Python builds, and configuration comes only from environment
-variables. The gateway is stateless apart from the snapshot file or ConfigMap. On Kubernetes
-or k3s, run `alembic upgrade head` as a Job, mount the snapshot as a ConfigMap and run OPA as
-a sidecar. Helm charts are part of phase 5.
+variables. The gateway is stateless apart from its document cache (`CACHE_DIR`, an
+`emptyDir` or small PVC is enough). On Kubernetes or k3s, run each service's `alembic upgrade head`
+as a Job, point gateways at the control plane with `CONFIG_SOURCE=control_plane`, and run OPA as a
+sidecar. The control plane is stateless apart from Postgres, so it can run more than one replica. Helm charts are part of phase 5.

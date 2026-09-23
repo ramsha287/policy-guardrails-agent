@@ -9,6 +9,7 @@ from clients.project_client import ProjectClient, get_project_client
 from database.session import SessionLocal
 from exceptions import ValidationError
 from services.redaction_service import RedactionService
+from utils.rate_limit import limiter
 
 
 async def get_session() -> AsyncIterator[AsyncSession]:
@@ -42,4 +43,11 @@ async def require_api_key(
     validated = await validator.validate_and_increment(x_api_key)
     if validated is None:
         raise HTTPException(status_code=401, detail="Invalid or revoked API key")
+    retry_after = limiter().check(validated.id, validated.scope)
+    if retry_after is not None:
+        raise HTTPException(
+            status_code=429,
+            detail=f"Rate limit exceeded for {validated.scope} key",
+            headers={"Retry-After": str(max(1, int(retry_after + 0.999)))},
+        )
     return validated

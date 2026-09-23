@@ -1,7 +1,7 @@
 from .api import GuardPayloadIn, GuardrailOutcome, GuardRequest, GuardResponse, PolicyOutcome
 from .client import GuardClient, GuardrailGatewayError
 from .guardrail import EmptyConfig, Guardrail, PluginContext, SecretReader, StateStore
-from .hooks import GuardDefaults, GuardHooks, GuardrailBlocked, SyncGuardClient, SyncGuardHooks
+from .hooks import GuardDefaults, GuardHooks, GuardrailBlocked, GuardrailEscalated, SyncGuardClient, SyncGuardHooks
 from .manifest import Capabilities, Manifest, RemoteSpec
 from .models import (
     DECISION_PRECEDENCE,
@@ -37,6 +37,7 @@ __all__ = [
     "GuardResponse",
     "Guardrail",
     "GuardrailBlocked",
+    "GuardrailEscalated",
     "GuardrailGatewayError",
     "GuardrailOutcome",
     "GuardrailResult",

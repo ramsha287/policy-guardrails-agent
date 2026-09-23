@@ -1,7 +1,8 @@
 # Full local stack: guardrail platform + existing ai-gateway services.
 #   docker compose up --build
 # Then call the gateway on http://localhost:8100 with the key in the bootstrap volume:
-#   docker compose exec guardrail-gateway cat /bootstrap/dev.env
+#   docker compose exec guardrail-gateway cat /bootstrap/dev.env      # DEMO_GATEWAY_API_KEY
+#   docker compose exec guardrail-control-plane cat /bootstrap/cp.env # CP_ADMIN_KEY, CP_APPROVER_KEY
 x-db-env: &db-env
   POSTGRES_DSN: postgresql+asyncpg://${POSTGRES_USER:-gateway}:${POSTGRES_PASSWORD:-gateway}@postgres:5432/${POSTGRES_DB:-gateway}
   LOG_LEVEL: ${LOG_LEVEL:-INFO}
@@ -9,6 +10,10 @@ x-db-env: &db-env
 x-gateway-build: &gateway-build
   context: .
   dockerfile: services/guardrail-gateway/Dockerfile
+
+# Dev-only secrets. Override them (or use a .env file) anywhere that is not your laptop.
+x-internal: &internal-token
+  INTERNAL_TOKEN: ${INTERNAL_TOKEN:-dev-internal-token-change-me}
 
 services:
   postgres:
@@ -72,6 +77,9 @@ services:
       PROJECT_CACHE_TTL_SECONDS: "60"
       REDIS_URL: redis://redis:6379/1
       ANALYZER_WORKERS: "4"             # Presidio thread pool size
+      HASH_SECRET: ${HASH_SECRET:-dev-hash-secret-change-me}   # change 9: HMAC for "hash" redaction
+      RATE_LIMIT_CLIENT_PER_MINUTE: "600"
+      RATE_LIMIT_SERVICE_PER_MINUTE: "0"   # guardrail engine: unlimited
     ports:
       - "8001:8001"
     depends_on:
@@ -105,12 +113,55 @@ services:
         condition: service_healthy
     restart: "no"
 
+  guardrail-control-plane:
+    build:
+      context: .
+      dockerfile: services/guardrail-control-plane/Dockerfile
+    # Migrations + idempotent dev bootstrap (imports the gateway's dev tenant, keys, agents,
+    # actions and dev snapshot; writes two dev admin keys to /bootstrap/cp.env), then serve.
+    command:
+      - sh
+      - -c
+      - >-
+        alembic upgrade head &&
+        python -m app.cli bootstrap-dev --snapshot /app/gateway-snapshots/dev.json
+        --plugin-dir /app/gateway-plugins --write /bootstrap/cp.env &&
+        exec uvicorn --factory app.main:create_app --host 0.0.0.0 --port 8200
+    environment:
+      <<: [*db-env, *internal-token]
+      REDIS_URL: redis://redis:6379/0
+      REVIEW_ENCRYPTION_KEY: ${REVIEW_ENCRYPTION_KEY:-3I97CCypg5ohqkex3CUIufgPsrgqRPIUcq3r-pZjgdg=}
+      TWO_PERSON_ENVIRONMENTS: '["production"]'
+      GATEWAY_URL: http://guardrail-gateway:8100
+      AUDIT_DSN: postgresql+asyncpg://${POSTGRES_USER:-gateway}:${POSTGRES_PASSWORD:-gateway}@postgres:5432/${POSTGRES_DB:-gateway}
+    volumes:
+      - bootstrap:/bootstrap
+    ports:
+      - "8200:8200"
+    depends_on:
+      guardrail-bootstrap:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8200/ready')"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+
   guardrail-gateway:
     build: *gateway-build
     environment:
-      <<: *db-env
+      <<: [*db-env, *internal-token]
       GATEWAY_ENV: dev
+      GATEWAY_ID: gateway-dev-1
       OPA_URL: http://opa:8181
+      # Snapshot + catalog come from the control plane; the last good copies are cached on disk
+      # so the gateway keeps serving if the control plane is down. Set CONFIG_SOURCE=file to go
+      # back to SNAPSHOT_PATH + the gateway's own tables.
+      CONFIG_SOURCE: control_plane
+      CONTROL_PLANE_URL: http://guardrail-control-plane:8200
+      CACHE_DIR: /var/cache/guardrail-gateway
       SNAPSHOT_PATH: /app/config/snapshots/dev.json
       BOOTSTRAP_ENV_FILE: /bootstrap/dev.env
       AI_GATEWAY_URL: http://instant-redaction-service:8001
@@ -118,13 +169,13 @@ services:
       # OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
     volumes:
       - bootstrap:/bootstrap:ro
-      # Edit snapshots live; the gateway reloads them within 30 s.
+      - gateway_cache:/var/cache/guardrail-gateway
       - ./services/guardrail-gateway/config/snapshots:/app/config/snapshots:ro
     ports:
       - "8100:8100"
     depends_on:
-      guardrail-bootstrap:
-        condition: service_completed_successfully
+      guardrail-control-plane:
+        condition: service_healthy
       instant-redaction-service:
         condition: service_healthy
       opa:
@@ -140,3 +191,4 @@ services:
 volumes:
   postgres_data:
   bootstrap:
+  gateway_cache:
