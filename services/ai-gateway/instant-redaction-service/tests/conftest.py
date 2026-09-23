@@ -29,7 +29,13 @@ PROJECTS = {
         "redaction_type": "replace",
     },
 }
-P1, P2 = list(PROJECTS)
+PROJECTS.update(
+    {
+        pid: {"id": pid, "entities": ["EMAIL_ADDRESS"], "customized": [], "redaction_type": "hash"}
+        for pid in ("44444444-4444-4444-4444-444444444444", "55555555-5555-5555-5555-555555555555")
+    }
+)
+P1, P2, H1, H2 = list(PROJECTS)
 
 
 class FakeProjectClient:

@@ -13,8 +13,8 @@ and the project APIs see no change.
 | 5 | instant-redaction | Cache project config (`PROJECT_CACHE_TTL_SECONDS`, default 60). project-service publishes changes on Redis `ai-gateway:project-changed`, which evicts entries immediately | **Done** (phase 3) |
 | 6 | instant-redaction | Presidio warm-up at start-up (already present) plus `GET /ready`, which returns 503 until the engines are loaded | **Done** |
 | 7 | both | Stop logging request bodies on validation errors (they carry the text being redacted) | **Done** |
-| 8 | project-service | API-key `scope` so the engine's key is `service` and rate-limited separately | Phase 4 |
-| 9 | project-service | `hash` redaction as HMAC-SHA256 with a per-project secret | Phase 4 |
+| 8 | project-service | API-key `scope` so the engine's key is `service` and rate-limited separately | **Done** (phase 4) |
+| 9 | project-service | `hash` redaction as HMAC-SHA256 with a per-project secret | **Done** (phase 4) |
 | 10 | both | `GET /version` | **Done** |
 
 ## 1. Findings on `/text`
@@ -58,10 +58,35 @@ Code: `RedactionService.redact_text_detailed()` and `_analyze_and_redact()` in
 - **Tests:** `instant-redaction-service/tests` runs against real Presidio and en_core_web_lg in CI
   (the `ai-gateway` job), with project-service and API keys faked.
 
+## Phase 4 changes
+
+### 8. API-key scope and rate limits
+
+- project-service: `api_keys.scope` is `client` (default) or `service`. Migration
+  `0004_api_key_scope.py` adds the column, and every existing key becomes `client`. Create the
+  guardrail engine's key with `"scope": "service"`. The platform's bootstrap already does this.
+- instant-redaction: each key gets a token bucket for its scope, set by
+  `RATE_LIMIT_CLIENT_PER_MINUTE` (default 600) and `RATE_LIMIT_SERVICE_PER_MINUTE` (default 0,
+  which means unlimited). Over the limit, the service answers **429** with `Retry-After`. Limits are
+  per process, so with N replicas the effective limit is N times higher.
+- **Deploy order:** run project-service migration `0004` **before** deploying the new
+  instant-redaction service. The service selects `scope` from `api_keys` and fails without the
+  column.
+
+### 9. Keyed `hash` redaction
+
+- `hash` mode is now HMAC-SHA256. Each project uses its own key, derived from `HASH_SECRET` and the
+  project id, so the same value hashes differently in two projects. The hash can no longer be
+  reversed by hashing guesses without the secret.
+- **Breaking for anyone who stores or compares hashes.** Values hashed before the upgrade will not
+  match values hashed after it. Re-hash stored values, or keep comparing old values separately.
+- If `HASH_SECRET` is not set, the service keeps the old unkeyed SHA-256 behaviour (and logs a
+  warning). Set it in every environment, keep it in your secret store, and do not rotate it
+  casually: rotating it changes every hash.
+
 ## Still open
 
-- **Unsalted `hash` mode.** A SHA-256 hash of a phone number or email can be reversed by brute
-  force (change 9, phase 4).
-- **Redaction service reads `api_keys` directly.** It shares that table with project-service.
-  This stays for now; the plan retires it in phase 4.
+- **Redaction service reads `api_keys` directly.** It shares that table with project-service,
+  and now reads `scope` from it too. Moving key validation behind a project-service endpoint is
+  planned for phase 5.
 - The project-service README still mentions MongoDB and Consul. The code uses PostgreSQL.

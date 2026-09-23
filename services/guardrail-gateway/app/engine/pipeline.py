@@ -7,7 +7,8 @@ Rules (plan section 4):
 - strongest decision wins: BLOCK > ESCALATE > MODIFY > ALLOW;
 - errors and time-outs follow the assignment's failure mode (fail_closed -> BLOCK);
 - `shadow` assignments run and are recorded but never change the outcome;
-- ESCALATE becomes BLOCK until the review queue ships (phase 4-5), so nothing slips through.
+- ESCALATE holds the request for human review when a review queue is configured
+  (CONFIG_SOURCE=control_plane); without one it becomes BLOCK, so nothing slips through.
 """
 
 from __future__ import annotations
@@ -164,6 +165,7 @@ class GuardrailEngine:
             decision=final,
             reason=reason,
             risk_score=risk,
-            payload=None if final in (Decision.BLOCK, Decision.ESCALATE) else current,
+            # ESCALATE keeps the payload so it can be *held* for review; the API never returns it.
+            payload=None if final == Decision.BLOCK else current,
             results=outcomes,
         )

@@ -1,4 +1,6 @@
 import asyncio
+import hashlib
+import hmac
 import json
 import logging
 import os
@@ -38,6 +40,26 @@ async def _run_blocking(fn: Callable[..., T], *args: Any) -> T:
     return await asyncio.get_running_loop().run_in_executor(_ANALYZER_POOL, fn, *args)
 
 
+# Change 9: `hash` redaction as HMAC-SHA256 with a per-project key derived from HASH_SECRET.
+# A plain SHA-256 of an email or phone number can be reversed by hashing candidates; an HMAC
+# cannot without the secret, and the same value hashes differently in different projects.
+# Without HASH_SECRET the legacy unsalted SHA-256 is used (and a warning is logged at start-up).
+def _hash_secret() -> str:
+    return os.getenv("HASH_SECRET", "")
+
+
+def hash_operator(project_id: Optional[str]) -> OperatorConfig:
+    secret = _hash_secret()
+    if not secret or not project_id:
+        return OperatorConfig("hash", {"hash_type": "sha256"})
+    project_key = hmac.new(secret.encode("utf-8"), str(project_id).encode("utf-8"), hashlib.sha256).digest()
+
+    def _hmac(value: str) -> str:
+        return hmac.new(project_key, value.encode("utf-8"), hashlib.sha256).hexdigest()
+
+    return OperatorConfig("custom", {"lambda": _hmac})
+
+
 _engines: Optional[Tuple[AnalyzerEngine, AnonymizerEngine, ImageRedactorEngine]] = None
 
 
@@ -52,6 +74,8 @@ def _get_engines() -> Tuple[AnalyzerEngine, AnonymizerEngine, ImageRedactorEngin
 
 def warmup_engines() -> None:
     """Eagerly initialize Presidio engines. Call from app lifespan startup."""
+    if not _hash_secret():
+        logger.warning("HASH_SECRET not set: 'hash' redaction uses unsalted SHA-256 (reversible by guessing)")
     _get_engines()
 
 
@@ -96,28 +120,40 @@ class RedactionService:
         self.score_threshold = score_threshold
         self.analyzer, self.anonymizer, self.image_redactor = _get_engines()
 
-    def _build_operator_config(self, redaction_type: str, redaction_value: Optional[str] = None) -> OperatorConfig:
+    def _build_operator_config(
+        self, redaction_type: str, redaction_value: Optional[str] = None, project_id: Optional[str] = None
+    ) -> OperatorConfig:
         if redaction_type == "replace":
             return OperatorConfig("replace", {"new_value": redaction_value})
         if redaction_type == "hash":
-            return OperatorConfig("hash", {"hash_type": "sha256"})
+            return hash_operator(project_id)
         if redaction_type == "mask":
             return OperatorConfig("mask", {"type": "mask", "masking_char": "*", "chars_to_mask": 100, "from_end": False})
         raise InvalidRedactionTypeError(redaction_type)
 
-    def _build_custom_patterns(self, custom_patterns: List[dict], redaction_type: str):
+    def _build_custom_patterns(self, custom_patterns: List[dict], redaction_type: str, project_id: Optional[str] = None):
         recognizers, custom_entity_map, operator_config = [], {}, {}
         for i, pattern in enumerate(custom_patterns):
             entity = f"CUSTOM_ENTITY_{i}"
             recognizers.append(DynamicCustomRecognizer(pattern["regex"], entity_name=entity))
             custom_entity_map[entity] = pattern["redaction"]
-            operator_config[entity] = self._build_operator_config(redaction_type, redaction_value=pattern["redaction"])
+            operator_config[entity] = self._build_operator_config(
+                redaction_type, redaction_value=pattern["redaction"], project_id=project_id
+            )
         return recognizers, custom_entity_map, operator_config
 
-    def _setup_standard_entities(self, entities: List[str], operator_config: Dict[str, OperatorConfig], redaction_type: str) -> None:
+    def _setup_standard_entities(
+        self,
+        entities: List[str],
+        operator_config: Dict[str, OperatorConfig],
+        redaction_type: str,
+        project_id: Optional[str] = None,
+    ) -> None:
         for entity in entities:
             redaction_value = f"[{entity}]" if redaction_type == "replace" else None
-            operator_config[entity] = self._build_operator_config(redaction_type, redaction_value=redaction_value)
+            operator_config[entity] = self._build_operator_config(
+                redaction_type, redaction_value=redaction_value, project_id=project_id
+            )
 
     def _format_results(self, results: List, text: str, custom_entity_map: Dict[str, str]) -> List[dict]:
         formatted, seen = [], set()
@@ -166,12 +202,15 @@ class RedactionService:
         custom_patterns = project.get("customized") or []
         redaction_type = project.get("redaction_type", "replace")
 
-        recognizers, custom_entity_map, operator_config = self._build_custom_patterns(custom_patterns, redaction_type)
+        project_id = project.get("id")
+        recognizers, custom_entity_map, operator_config = self._build_custom_patterns(
+            custom_patterns, redaction_type, project_id
+        )
         entities = list(project.get("entities") or [])
 
         builtin_results = []
         if entities:
-            self._setup_standard_entities(entities, operator_config, redaction_type)
+            self._setup_standard_entities(entities, operator_config, redaction_type, project_id)
             builtin_results = self.analyzer.analyze(text=text, entities=entities, language=self.language)
 
         builtin_spans = set()

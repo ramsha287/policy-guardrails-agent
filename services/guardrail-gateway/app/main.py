@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 
 import httpx
@@ -20,6 +20,7 @@ from app.context.catalog import CachedCatalog
 from app.db.session import make_engine, make_sessionmaker
 from app.engine.pipeline import GuardrailEngine
 from app.engine.registry import PluginRegistry, SnapshotHolder
+from app.engine.remote import CatalogHolder, ControlPlaneClient, ControlPlaneSync, DocCache
 from app.engine.state import RedisStateStore
 from app.gateway.auth import Authenticator
 from app.gateway.middleware import BodySizeLimitMiddleware, RequestContextMiddleware
@@ -27,11 +28,18 @@ from app.observability import setup_logging, setup_tracing
 from app.policy.opa import OpaClient
 from app.repositories.api_keys import PgApiKeyStore
 from app.repositories.catalog import PgCatalogStore
-from app.routers import guard, health
+from app.routers import escalations, guard, health, internal
 from app.services import Services
 from guardrail_sdk import EnvSecretReader, PluginContext
 
 logger = logging.getLogger(__name__)
+
+
+def _is_set(getter: Callable[[], object]) -> Callable[[], Awaitable[bool]]:
+    async def check() -> bool:
+        return getter() is not None
+
+    return check
 
 
 @asynccontextmanager
@@ -50,9 +58,40 @@ async def _production_lifespan(app: FastAPI) -> AsyncIterator[None]:
     plugin_ctx = PluginContext(http=http, secrets=EnvSecretReader(), state=state, environment=settings.environment)
     registry = PluginRegistry(settings.plugin_dirs, plugin_ctx)
     registry.discover()
-    snapshots = SnapshotHolder(registry, settings.snapshot_path, settings.environment)
-    await snapshots.load()
-    watcher = asyncio.create_task(snapshots.watch(settings.snapshot_reload_seconds), name="snapshot-watch")
+    tasks: list[asyncio.Task[None]] = []
+    control_plane: ControlPlaneClient | None = None
+
+    if settings.config_source == "control_plane":
+        if not (settings.control_plane_url and settings.internal_token):
+            raise RuntimeError("CONFIG_SOURCE=control_plane needs CONTROL_PLANE_URL and INTERNAL_TOKEN")
+        snapshots = SnapshotHolder(registry, None, settings.environment)
+        catalog_holder = CatalogHolder(settings.environment)
+        control_plane = ControlPlaneClient(http, settings.control_plane_url, settings.internal_token)
+        sync = ControlPlaneSync(
+            control_plane,
+            snapshots,
+            catalog_holder,
+            registry,
+            DocCache(settings.cache_dir, settings.environment),
+            environment=settings.environment,
+            gateway_id=settings.gateway_id,
+        )
+        await sync.start()
+        tasks.append(asyncio.create_task(sync.poll(settings.cp_poll_seconds), name="cp-poll"))
+        tasks.append(asyncio.create_task(sync.heartbeat(settings.heartbeat_seconds), name="cp-heartbeat"))
+        if settings.redis_url:
+            tasks.append(asyncio.create_task(sync.listen(settings.redis_url), name="cp-events"))
+        # Short caches: revocations and score edits arrive through the catalog within seconds.
+        auth = Authenticator(catalog_holder, ttl_seconds=5, negative_ttl_seconds=2)
+        scoring = CachedCatalog(catalog_holder, ttl_seconds=2)
+        extra_ready = {"catalog": _is_set(lambda: catalog_holder.version)}
+    else:
+        snapshots = SnapshotHolder(registry, settings.snapshot_path, settings.environment)
+        await snapshots.load()
+        tasks.append(asyncio.create_task(snapshots.watch(settings.snapshot_reload_seconds), name="snapshot-watch"))
+        auth = Authenticator(PgApiKeyStore(sm), ttl_seconds=settings.auth_cache_ttl_seconds)
+        scoring = CachedCatalog(PgCatalogStore(sm), ttl_seconds=settings.catalog_cache_ttl_seconds)
+        extra_ready = {}
 
     audit = AuditWriter(
         sm,
@@ -75,22 +114,30 @@ async def _production_lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     app.state.services = Services(
         settings=settings,
-        auth=Authenticator(PgApiKeyStore(sm), ttl_seconds=settings.auth_cache_ttl_seconds),
-        contexts=ContextBuilder(
-            CachedCatalog(PgCatalogStore(sm), ttl_seconds=settings.catalog_cache_ttl_seconds),
-            settings.environment,
-        ),
+        auth=auth,
+        contexts=ContextBuilder(scoring, settings.environment),
         policy=opa,
-        engine=GuardrailEngine(default_timeout_ms=settings.default_guardrail_timeout_ms),
+        # With a review queue, ESCALATE holds the request for a human; without one it blocks.
+        engine=GuardrailEngine(
+            default_timeout_ms=settings.default_guardrail_timeout_ms, escalate_as_block=control_plane is None
+        ),
         snapshots=snapshots,
         audit=audit,
-        readiness={"database": db_ok, "opa": opa.healthy, **({"redis": state.ping} if state else {})},
+        readiness={
+            "database": db_ok,
+            "opa": opa.healthy,
+            **({"redis": state.ping} if state else {}),
+            **extra_ready,
+        },
+        registry=registry,
+        control_plane=control_plane,
     )
     logger.info("guardrail-gateway ready (env=%s, snapshot=%s)", settings.environment, snapshots.version)
     try:
         yield
     finally:
-        watcher.cancel()
+        for t in tasks:
+            t.cancel()
         await audit.stop()
         await snapshots.close()
         await http.aclose()
@@ -129,6 +176,8 @@ def create_app(settings: Settings | None = None, services: Services | None = Non
 
     app.include_router(health.router)
     app.include_router(guard.router)
+    app.include_router(escalations.router)
+    app.include_router(internal.router)
     setup_tracing(app, settings.otel_endpoint)
     return app
 

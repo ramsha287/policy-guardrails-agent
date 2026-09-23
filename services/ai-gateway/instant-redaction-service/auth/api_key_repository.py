@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 class ValidatedApiKey:
     id: str
     name: str
+    scope: str = "client"
 
 
 class ApiKeyValidator:
@@ -35,7 +36,7 @@ class ApiKeyValidator:
                        last_used_at = NOW()
                  WHERE key_hash = :h
                    AND is_active = TRUE
-                RETURNING id, name
+                RETURNING id, name, scope
                 """
             ),
             {"h": key_hash},
@@ -44,4 +45,4 @@ class ApiKeyValidator:
         await self.session.commit()
         if row is None:
             return None
-        return ValidatedApiKey(id=str(row.id), name=row.name)
+        return ValidatedApiKey(id=str(row.id), name=row.name, scope=row.scope)

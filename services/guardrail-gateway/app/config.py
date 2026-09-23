@@ -23,6 +23,17 @@ class Settings(BaseSettings):
     opa_decision_path: str = Field("/v1/data/guardrails/authz/decision", alias="OPA_DECISION_PATH")
     opa_timeout_ms: int = Field(300, alias="OPA_TIMEOUT_MS")
 
+    # Where the snapshot and catalog come from:
+    #   file          - SNAPSHOT_PATH + the gateway's own guardrail.* tables (phases 1-3)
+    #   control_plane - published by guardrail-control-plane, cached on disk (phase 4+)
+    config_source: Literal["file", "control_plane"] = Field("file", alias="CONFIG_SOURCE")
+    control_plane_url: str | None = Field(None, alias="CONTROL_PLANE_URL")
+    internal_token: str | None = Field(None, alias="INTERNAL_TOKEN")
+    gateway_id: str | None = Field(None, alias="GATEWAY_ID")  # default: hostname
+    cache_dir: Path = Field(Path("/var/cache/guardrail-gateway"), alias="CACHE_DIR")
+    cp_poll_seconds: int = Field(30, alias="CP_POLL_SECONDS")
+    heartbeat_seconds: int = Field(30, alias="HEARTBEAT_SECONDS")
+
     # Guardrail engine
     snapshot_path: Path = Field(Path("/app/config/snapshots/dev.json"), alias="SNAPSHOT_PATH")
     snapshot_reload_seconds: int = Field(30, alias="SNAPSHOT_RELOAD_SECONDS")

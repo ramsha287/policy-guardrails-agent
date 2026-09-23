@@ -16,6 +16,7 @@ return the original value after a MODIFY, so an agent cannot accidentally use un
 from __future__ import annotations
 
 import dataclasses
+import time
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -23,19 +24,33 @@ import httpx
 
 from .api import GuardPayloadIn, GuardRequest, GuardResponse
 from .client import GuardClient, GuardrailGatewayError
-from .models import Chunk, DataClassification, Message, Stage, ToolCall
+from .documents import EscalationStatus
+from .models import Chunk, DataClassification, Decision, Message, Stage, ToolCall
 
 
 class GuardrailBlocked(Exception):
     """The gateway blocked this step (guardrail BLOCK or policy DENY). `response` has the details."""
 
-    def __init__(self, response: GuardResponse) -> None:
+    def __init__(self, response: GuardResponse, reason: str | None = None) -> None:
         self.response = response
-        super().__init__(f"{response.stage.value} blocked: {response.reason}")
+        self._reason = reason or response.reason
+        super().__init__(f"{response.stage.value} blocked: {self._reason}")
 
     @property
     def reason(self) -> str:
-        return self.response.reason
+        return self._reason
+
+
+class GuardrailEscalated(GuardrailBlocked):
+    """Held for human review. Poll `client.wait_for_escalation(escalation_id)` or retry later.
+
+    Raised when the hooks are not configured to wait (`wait_for_review_seconds=0`), or when the
+    wait ended with the review still pending.
+    """
+
+    @property
+    def escalation_id(self) -> str | None:
+        return self.response.escalation_id
 
 
 @dataclass(frozen=True)
@@ -48,6 +63,9 @@ class GuardDefaults:
     delegation_chain: tuple[str, ...] = ()
     llm_action: str = "llm.chat"
     retrieval_action: str = "retrieval.search"
+    # > 0: when a step is escalated, poll for the reviewer's decision up to this long.
+    wait_for_review_seconds: float = 0.0
+    review_poll_seconds: float = 2.0
     extra: dict[str, Any] = field(default_factory=dict)
 
     def fields(self) -> dict[str, Any]:
@@ -65,9 +83,19 @@ class GuardDefaults:
 
 
 def _checked(resp: GuardResponse) -> GuardPayloadIn:
+    if resp.decision == Decision.ESCALATE:
+        raise GuardrailEscalated(resp)
     if not resp.allowed or resp.payload is None:
         raise GuardrailBlocked(resp)
     return resp.payload
+
+
+def _after_review(resp: GuardResponse, status: EscalationStatus) -> GuardPayloadIn:
+    if status.status == "approved" and status.payload is not None:
+        return GuardPayloadIn.model_validate(status.payload)
+    if status.status == "pending":
+        raise GuardrailEscalated(resp, f"still waiting for human review ({status.escalation_id})")
+    raise GuardrailBlocked(resp, status.reason)
 
 
 def _llm_payload(prompt: str | list[Message] | list[dict[str, str]]) -> GuardPayloadIn:
@@ -107,6 +135,13 @@ class GuardHooks:
 
     async def _guard(self, stage: Stage, payload: GuardPayloadIn, action: str, resource: str | None = None) -> Any:
         resp = await self.client.guard(stage, payload, **_request_kwargs(self.defaults, action, resource))
+        if resp.decision == Decision.ESCALATE and resp.escalation_id and self.defaults.wait_for_review_seconds > 0:
+            status = await self.client.wait_for_escalation(
+                resp.escalation_id,
+                timeout_seconds=self.defaults.wait_for_review_seconds,
+                poll_seconds=self.defaults.review_poll_seconds,
+            )
+            return _after_review(resp, status)
         return _checked(resp)
 
     async def before_llm(self, prompt: Any, *, action: str | None = None) -> Any:
@@ -171,6 +206,9 @@ class SyncGuardClient:
     def __exit__(self, *exc: object) -> None:
         self.close()
 
+    def get_escalation(self, escalation_id: str) -> EscalationStatus:
+        return _sync_get_escalation(self, escalation_id)
+
     def guard(self, stage: Stage | str, payload: GuardPayloadIn, *, action: str, **fields: Any) -> GuardResponse:
         stage = Stage(stage)
         body = GuardRequest(agent_id=self._agent_id, action=action, payload=payload, **fields)
@@ -190,6 +228,16 @@ class SyncGuardClient:
         raise GuardrailGatewayError(resp.status_code, resp.text[:500])
 
 
+def _sync_get_escalation(client: SyncGuardClient, escalation_id: str) -> EscalationStatus:
+    try:
+        resp = client._http.get(f"{client._base}/v1/escalations/{escalation_id}", headers=client._headers)
+    except httpx.HTTPError as exc:
+        raise GuardrailGatewayError(None, f"guardrail gateway unreachable: {exc}") from exc
+    if resp.status_code != 200:
+        raise GuardrailGatewayError(resp.status_code, resp.text[:500])
+    return EscalationStatus.model_validate(resp.json())
+
+
 class SyncGuardHooks:
     def __init__(self, client: SyncGuardClient, defaults: GuardDefaults | None = None, **defaults_kw: Any) -> None:
         self.client = client
@@ -199,7 +247,15 @@ class SyncGuardHooks:
         return SyncGuardHooks(self.client, dataclasses.replace(self.defaults, **overrides))
 
     def _guard(self, stage: Stage, payload: GuardPayloadIn, action: str, resource: str | None = None) -> Any:
-        return _checked(self.client.guard(stage, payload, **_request_kwargs(self.defaults, action, resource)))
+        resp = self.client.guard(stage, payload, **_request_kwargs(self.defaults, action, resource))
+        if resp.decision == Decision.ESCALATE and resp.escalation_id and self.defaults.wait_for_review_seconds > 0:
+            deadline = time.monotonic() + self.defaults.wait_for_review_seconds
+            while True:
+                status = self.client.get_escalation(resp.escalation_id)
+                if status.status != "pending" or time.monotonic() >= deadline:
+                    return _after_review(resp, status)
+                time.sleep(min(self.defaults.review_poll_seconds, max(0.0, deadline - time.monotonic())))
+        return _checked(resp)
 
     def before_llm(self, prompt: Any, *, action: str | None = None) -> Any:
         return _llm_result(prompt, self._guard(Stage.INPUT, _llm_payload(prompt), action or self.defaults.llm_action))

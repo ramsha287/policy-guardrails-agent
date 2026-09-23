@@ -41,12 +41,14 @@ class ApiKeyService:
             name=data.name,
             key_hash=_hash_key(raw_key),
             prefix=raw_key[:_PREFIX_LENGTH],
+            scope=data.scope,
         )
         record = await self.repo.insert(record)
         logger.info("API key created: id=%s name='%s'", record.id, record.name)
         return ApiKeyCreatedResponse(
             id=str(record.id),
             name=record.name,
+            scope=record.scope,
             key=raw_key,
         )
 

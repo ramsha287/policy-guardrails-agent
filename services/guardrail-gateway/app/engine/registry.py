@@ -108,9 +108,14 @@ class PluginRegistry:
 
 
 class SnapshotHolder:
-    """Holds the live snapshot; reloads the file when it changes and swaps atomically."""
+    """Holds the live snapshot and swaps it atomically.
 
-    def __init__(self, registry: PluginRegistry, path: Path, environment: str) -> None:
+    Sources: a file (CONFIG_SOURCE=file, reloaded when it changes) or documents pushed in by the
+    control-plane sync (`apply`). A snapshot that fails to compile is rejected and the last good
+    one keeps serving; the error is reported on /ready and to the control plane.
+    """
+
+    def __init__(self, registry: PluginRegistry, path: Path | None, environment: str) -> None:
         self._registry = registry
         self._path = path
         self._env = environment
@@ -118,26 +123,41 @@ class SnapshotHolder:
         self.current: CompiledSnapshot | None = None
         self.last_error: str | None = None
 
-    async def load(self) -> bool:
+    async def apply(self, doc: SnapshotDoc) -> bool:
+        if self.current is not None and self.current.version == doc.version:
+            return True
         try:
-            mtime = self._path.stat().st_mtime
-            new = await self._registry.compile_file(self._path, self._env)
+            new = await self._registry.compile(doc, self._env)
         except Exception as exc:  # noqa: BLE001 - keep serving the last good snapshot
-            self.last_error = f"{exc.__class__.__name__}: {exc}"
-            logger.error("Snapshot %s rejected, keeping %s: %s", self._path, self.version, self.last_error)
+            self.last_error = f"{doc.version}: {exc.__class__.__name__}: {exc}"
+            logger.error("Snapshot rejected, keeping %s: %s", self.version, self.last_error)
             return False
-        old, self.current, self._mtime, self.last_error = self.current, new, mtime, None
+        old, self.current, self.last_error = self.current, new, None
         logger.info("Snapshot %s loaded with %d assignment(s)", new.version, len(new.bound))
         if old is not None:
             # Let in-flight requests on the old snapshot finish before closing its clients.
             asyncio.get_running_loop().call_later(30, lambda: asyncio.ensure_future(old.close()))
         return True
 
+    async def load(self) -> bool:
+        assert self._path is not None, "file source needs a path"
+        try:
+            mtime = self._path.stat().st_mtime
+            doc = load_snapshot(self._path)
+        except Exception as exc:  # noqa: BLE001
+            self.last_error = f"{exc.__class__.__name__}: {exc}"
+            logger.error("Snapshot %s unreadable, keeping %s: %s", self._path, self.version, self.last_error)
+            return False
+        self._mtime = mtime
+        return await self.apply(doc)
+
     @property
     def version(self) -> str | None:
         return self.current.version if self.current else None
 
     async def reload_if_changed(self) -> None:
+        if self._path is None:
+            return
         try:
             mtime = self._path.stat().st_mtime
         except OSError:

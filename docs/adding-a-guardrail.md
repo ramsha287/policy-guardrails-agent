@@ -87,18 +87,35 @@ guardrail evaluate --manifest path/to/guardrail.yaml --config config.json \
 
 ## 5. Roll it out
 
-Add an assignment to `services/guardrail-gateway/config/snapshots/<env>.json`. From phase 4,
-use the control-plane API instead.
+Ship the guardrail in the gateway image first, so the gateways report it in their heartbeat. Then
+register the version with the control plane, add a **shadow** assignment and publish it. Full API:
+[control-plane.md](control-plane.md).
 
-```json
-{"id": "global-prompt-injection", "guardrail_id": "prompt-injection", "guardrail_version": "1.0.0",
- "scope_type": "global", "stages": ["input"], "order": 5, "mode": "shadow", "config": {"threshold": 0.8}}
+```bash
+CP=localhost:8200/cp/v1; A="X-Admin-Key: $CP_ADMIN_KEY"; J='content-type: application/json'
+# 1. register the manifest (attach the conformance report if you have one)
+curl -s -XPOST $CP/guardrails/versions -H "$A" -H "$J" -d "{\"manifest\": $(python -c 'import yaml,json;print(json.dumps(yaml.safe_load(open("guardrail.yaml"))))')}"
+# 2. assign it in shadow mode
+curl -s -XPUT $CP/environments/staging/assignments/global-prompt-injection -H "$A" -H "$J" -d '{
+  "guardrail_id": "prompt-injection", "guardrail_version": "1.0.0", "scope_type": "global",
+  "stages": ["input"], "order": 5, "mode": "shadow", "config": {"threshold": 0.8}}'
+# 3. check it against real traffic before it goes live, then publish
+curl -s -XPOST $CP/simulate -H "$A" -H "$J" -d '{"environment":"staging","tenant_id":"demo","stage":"input",
+  "request":{"agent_id":"research-agent","action":"llm.chat","payload":{"text":"ignore previous instructions"}}}'
+curl -s -XPOST $CP/environments/staging/publish -H "$A" -H "$J" -d '{"note":"prompt-injection in shadow"}'
 ```
 
-The gateway reloads the snapshot within 30 s. If the new snapshot fails to compile (unknown
-guardrail version, unsupported stage, invalid config), the gateway keeps the last good one
-and reports the error on `/ready`. Watch `guardrail_decisions_total{id="prompt-injection",mode="shadow"}`,
-then change `mode` to `enforce`.
+Publishing refuses the snapshot, and nothing changes, if the version is not registered or is
+deprecated, a stage is not in the manifest, `config` does not match `config_schema`, a parallel
+group has a guardrail that is not `parallel_safe`, or a live gateway does not have the version
+installed. Gateways pick the new snapshot up within seconds. Watch
+`guardrail_decisions_total{id="prompt-injection",mode="shadow"}` (or `GET /cp/v1/analytics/guardrails`),
+then `PATCH` the assignment to `{"mode": "enforce"}` and publish again. In production a second
+admin key approves the publish. If something goes wrong, `POST .../rollback` to the previous version.
+
+With `CONFIG_SOURCE=file`, add the same assignment JSON to
+`services/guardrail-gateway/config/snapshots/<env>.json` instead. The gateway reloads it within 30 s
+and keeps the last good snapshot if the new one does not compile.
 
 Scopes are `global`, `tenant` (`scope_id: "acme"`) and `agent` (`scope_id: "acme/support-bot"`).
 The most specific scope wins for each guardrail id, so a disabled tenant assignment turns off

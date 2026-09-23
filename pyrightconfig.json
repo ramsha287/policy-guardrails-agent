@@ -1,8 +1,31 @@
 {
-  "include": ["packages/guardrail-sdk/guardrail_sdk", "services/guardrail-gateway/app"],
-  "extraPaths": ["packages/guardrail-sdk", "services/guardrail-gateway"],
+  "include": [
+    "packages/guardrail-sdk/guardrail_sdk",
+    "services/guardrail-gateway/app",
+    "services/guardrail-control-plane/app"
+  ],
+  "extraPaths": [
+    "packages/guardrail-sdk",
+    "services/guardrail-gateway"
+  ],
   "pythonVersion": "3.11",
   "typeCheckingMode": "basic",
   "reportMissingImports": "warning",
-  "reportMissingModuleSource": "none"
+  "reportMissingModuleSource": "none",
+  "executionEnvironments": [
+    {
+      "root": "services/guardrail-control-plane",
+      "extraPaths": [
+        "packages/guardrail-sdk",
+        "services/guardrail-control-plane"
+      ]
+    },
+    {
+      "root": "services/guardrail-gateway",
+      "extraPaths": [
+        "packages/guardrail-sdk",
+        "services/guardrail-gateway"
+      ]
+    }
+  ]
 }

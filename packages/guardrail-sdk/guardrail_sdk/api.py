@@ -66,6 +66,8 @@ class GuardResponse(BaseModel):
     policy: PolicyOutcome
     results: list[GuardrailOutcome] = Field(default_factory=list)
     snapshot_version: str | None = None
+    # Set when decision == "escalate" (HTTP 202): poll GET /v1/escalations/{escalation_id}.
+    escalation_id: str | None = None
 
     @property
     def allowed(self) -> bool:

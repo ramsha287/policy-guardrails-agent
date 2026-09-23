@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Optional
+from typing import Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -8,6 +8,7 @@ from exceptions import ValidationError
 
 class ApiKeyCreate(BaseModel):
     name: str = Field(..., examples=["frontend-prod"])
+    scope: Literal["client", "service"] = Field("client", description="service = platform services (guardrail engine)")
 
     @field_validator("name")
     @classmethod
@@ -24,6 +25,7 @@ class ApiKeyCreatedResponse(BaseModel):
 
     id: str
     name: str
+    scope: str
     key: str
 
 
@@ -35,6 +37,7 @@ class ApiKeyResponse(BaseModel):
     id: str
     name: str
     prefix: str
+    scope: str
     usage_count: int
     last_used_at: Optional[datetime]
     is_active: bool
