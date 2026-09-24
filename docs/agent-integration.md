@@ -108,6 +108,47 @@ answer = guard_output(hooks, result)
 With `@CrewBase`, call `guard_inputs` in a `@before_kickoff` method and `guard_output` in an
 `@after_kickoff` method.
 
+## Proxy mode (no code changes)
+
+If the agent already uses an OpenAI-compatible client, you can put the gateway in front of the
+model instead of calling hooks. Turn it on with `PROXY_ENABLED=true` (Helm: `gateway.proxy.enabled`).
+The gateway holds the provider key (`PROXY_UPSTREAM_API_KEY`); agents only ever have a gateway key.
+
+```python
+from openai import OpenAI
+
+client = OpenAI(
+    base_url="http://guardrail-gateway:8100/v1",
+    api_key=GATEWAY_API_KEY,                           # gk_..., not the provider key
+    default_headers={"X-Agent-Id": "support-bot", "X-Data-Classification": "PII"},
+)
+resp = client.chat.completions.create(model="gpt-4o-mini", messages=[{"role": "user", "content": question}])
+```
+
+- **Input stage** over all messages. Redactions are applied before the provider sees them.
+- **Output stage** over each answer, and the **tool stage** over each tool call the model
+  requests. The tool name is the action, so OPA checks it against the agent's allowed tools.
+- Blocked, policy-denied or held requests return **403** with an OpenAI-style error: `type` is
+  `guardrail_blocked` or `guardrail_escalated` (with `escalation_id`). The model's answer is never
+  returned in that case.
+- `stream: true` and non-text content (images, audio) return 400. They can't be checked before
+  release, so they are refused (fail-closed).
+- Headers: `X-Agent-Id` (default `PROXY_DEFAULT_AGENT_ID`), `X-Guardrail-Action` (default
+  `llm.chat`), `X-Data-Classification`, `X-User-Id`, `X-Session-Id`. The response carries
+  `X-Guardrail-Input-Decision` and `X-Guardrail-Output-Decision`, plus `X-Guardrail-Tool-Decision`
+  when there were tool calls.
+- `PROXY_MODELS` restricts which models agents may use.
+
+Proxy mode covers input and output (and tool calls the model proposes). Retrieval and tool
+results still need the hooks, because the proxy never sees them.
+
+## Rate limits
+
+Each gateway API key is limited to `GUARD_RATE_LIMIT_PER_MINUTE` requests per minute. Admins can
+set a different limit per key in the console. Over the limit, the gateway answers **429** with
+`Retry-After`. The SDK raises `GuardrailGatewayError(429)`, which hooks treat like any gateway
+failure (the step does not run). Back off and retry the whole step.
+
 ## Sample agent
 
 `examples/sample_agent/agent.py` is a small agent without a framework that uses all four stages.

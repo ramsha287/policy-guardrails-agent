@@ -7,7 +7,7 @@ from contextlib import asynccontextmanager
 from contextvars import ContextVar
 from typing import Any
 
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -352,6 +352,26 @@ class PgStore:
 
     async def put_review(self, review):
         await self._merge(m.Review, review.model_dump())
+
+    async def decide_review(self, review_id, *, status, reviewer, decided_at, decision_note):
+        # Conditional UPDATE: two reviewers deciding at once can't both win, and a decision is
+        # never overwritten by a stale read-modify-write.
+        async with self._s() as s:
+            result = await s.execute(
+                update(m.Review)
+                .where(m.Review.id == review_id, m.Review.status == "pending", m.Review.expires_at > decided_at)
+                .values(status=status, reviewer=reviewer, decided_at=decided_at, decision_note=decision_note)
+                .returning(m.Review.id)
+            )
+            return result.first() is not None
+
+    async def add_review_raw_viewer(self, review_id, actor):
+        async with self._s() as s:
+            await s.execute(
+                update(m.Review)
+                .where(m.Review.id == review_id)
+                .values(raw_viewed_by=func.array_append(m.Review.raw_viewed_by, actor))
+            )
 
     async def list_reviews(self, tenant_id=None, status=None, limit=100):
         q = select(m.Review).order_by(m.Review.created_at.desc()).limit(limit)

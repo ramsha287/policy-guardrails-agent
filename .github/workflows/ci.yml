@@ -102,6 +102,94 @@ jobs:
         working-directory: services/guardrail-control-plane
         run: mypy app
 
+  console:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/console
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - run: npm install --no-audit --no-fund
+      - name: Type check
+        run: npm run typecheck
+      - name: Unit tests
+        run: npm test
+      - name: Build
+        run: npm run build
+      - name: Browser smoke test against the mock control plane (every screen, light/dark, phone width)
+        run: |
+          npx playwright install --with-deps chromium
+          SCREENSHOTS=screenshots npm run e2e
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: console-screenshots
+          path: apps/console/screenshots
+          if-no-files-found: ignore
+
+  helm:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/setup-helm@v4
+        with:
+          version: v3.16.2
+      - name: OPA policies in the chart match policies/
+        run: diff -u policies/guardrails/authz.rego deploy/helm/guardrail-platform/files/policies/authz.rego
+      - name: Lint (defaults, k3s, cloud)
+        working-directory: deploy/helm/guardrail-platform
+        run: |
+          helm lint . --set secrets.create=true
+          helm lint . -f values-k3s.yaml --set secrets.existingSecret=s
+          helm lint . -f values-cloud.yaml
+      - name: Render and validate against the Kubernetes schemas
+        working-directory: deploy/helm/guardrail-platform
+        run: |
+          curl -sSL https://github.com/yannh/kubeconform/releases/download/v0.6.7/kubeconform-linux-amd64.tar.gz | tar xz
+          for f in "--set secrets.create=true" "-f values-k3s.yaml --set secrets.existingSecret=s" \
+                   "-f values-cloud.yaml" "-f values-k3s.yaml --set secrets.existingSecret=s --set mtls.mode=app --set mtls.app.certManager.enabled=true"; do
+            echo "== $f"
+            helm template guardrails . $f > /tmp/out.yaml
+            ./kubeconform -strict -summary -ignore-missing-schemas -kubernetes-version 1.30.0 /tmp/out.yaml
+          done
+      - name: Alert rules are valid PromQL
+        run: |
+          docker run --rm -v "$PWD/deploy/helm/guardrail-platform/files/prometheus:/rules" --entrypoint promtool \
+            prom/prometheus:v2.54.1 check rules /rules/guardrail-alerts.yaml
+
+  security:
+    # Report-only until the first baseline is triaged (docs/security/pentest-plan.md).
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install pip-audit
+      - name: Python dependencies (known vulnerabilities)
+        run: |
+          for r in services/guardrail-gateway/requirements.txt services/guardrail-control-plane/requirements.txt \
+                   services/ai-gateway/project-service/requirements.txt services/ai-gateway/instant-redaction-service/requirements.txt; do
+            echo "== $r"; pip-audit -r "$r" --progress-spinner off || true
+          done
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Console dependencies
+        working-directory: apps/console
+        run: npm install --no-audit --no-fund && npm audit --omit=dev || true
+      - name: Filesystem scan (secrets, misconfigurations, vulnerabilities)
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          scan-type: fs
+          scanners: vuln,secret,misconfig
+          severity: HIGH,CRITICAL
+          exit-code: "0"
+
   ai-gateway:
     # Real Presidio + spaCy en_core_web_lg; project-service and API keys are faked.
     runs-on: ubuntu-latest
@@ -122,7 +210,7 @@ jobs:
     # Full docker compose stack + sample agent + evaluation set. Runs on main and on demand.
     if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
-    needs: [gateway, control-plane, ai-gateway]
+    needs: [gateway, control-plane, console, ai-gateway]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -139,6 +227,17 @@ jobs:
           export GUARDRAIL_E2E_KEY=$(docker compose exec -T guardrail-gateway sh -c '. /bootstrap/dev.env; echo $DEMO_GATEWAY_API_KEY')
           export CP_E2E_ADMIN_KEY=$(docker compose exec -T guardrail-control-plane sh -c '. /bootstrap/cp.env; echo $CP_ADMIN_KEY')
           pytest tests/e2e -v
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Console against the live control plane (read-only + one simulation)
+        working-directory: apps/console
+        run: |
+          npm install --no-audit --no-fund
+          npx playwright install --with-deps chromium
+          export CONSOLE_URL=http://localhost:8200
+          export CONSOLE_ADMIN_KEY=$(docker compose exec -T guardrail-control-plane sh -c '. /bootstrap/cp.env; echo $CP_ADMIN_KEY')
+          npm run e2e
       - name: Precision / recall on the labelled set (requirement D)
         # Report-only until the first baseline is recorded; then drop continue-on-error and
         # set MIN_PRECISION / MIN_RECALL to the agreed thresholds.

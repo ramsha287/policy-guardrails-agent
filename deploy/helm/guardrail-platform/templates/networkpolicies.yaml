@@ -1,0 +1,324 @@
+{{- if .Values.networkPolicy.enabled }}
+{{- $np := .Values.networkPolicy -}}
+{{- $sel := dict "app.kubernetes.io/instance" .Release.Name -}}
+# Default deny for every pod of this release, then only the flows the platform needs.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "gp.name" (dict "root" $ "component" "default-deny") }}
+  labels: {{- include "gp.labels" (dict "root" $ "component" "network") | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels: {{- toYaml $sel | nindent 6 }}
+  policyTypes: [Ingress, Egress]
+---
+# DNS for everyone in the release.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "gp.name" (dict "root" $ "component" "allow-dns") }}
+  labels: {{- include "gp.labels" (dict "root" $ "component" "network") | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels: {{- toYaml $sel | nindent 6 }}
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - namespaceSelector: {}
+          podSelector:
+            matchLabels: {k8s-app: kube-dns}
+      ports:
+        - {protocol: UDP, port: 53}
+        - {protocol: TCP, port: 53}
+{{- if .Values.gateway.enabled }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "gp.name" (dict "root" $ "component" "gateway") }}
+  labels: {{- include "gp.labels" (dict "root" $ "component" "network") | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/component: gateway
+  policyTypes: [Ingress, Egress]
+  ingress:
+    # agents (and the ingress controller) on the public port
+    - from:
+        {{- include "gp.np.ns" $np.ingressControllerNamespace | nindent 8 }}
+        {{- range $np.agentNamespaces }}
+        {{- include "gp.np.ns" . | nindent 8 }}
+        {{- end }}
+        - podSelector: {}   # any pod in this namespace (agents deployed alongside)
+      ports:
+        - {protocol: TCP, port: {{ .Values.gateway.port }}}
+    # the control plane's simulation calls (internal port with mtls.mode=app)
+    - from:
+        {{- include "gp.np.from" (dict "root" $ "component" "control-plane") | nindent 8 }}
+      ports:
+        - {protocol: TCP, port: {{ .Values.gateway.port }}}
+        - {protocol: TCP, port: {{ .Values.gateway.internalPort }}}
+    {{- if $np.prometheusNamespace }}
+    - from:
+        {{- include "gp.np.ns" $np.prometheusNamespace | nindent 8 }}
+      ports:
+        - {protocol: TCP, port: {{ .Values.gateway.port }}}
+    {{- end }}
+  egress:
+    {{- if .Values.controlPlane.enabled }}
+    - to:
+        {{- include "gp.np.from" (dict "root" $ "component" "control-plane") | nindent 8 }}
+      ports:
+        - {protocol: TCP, port: {{ .Values.controlPlane.port }}}
+        - {protocol: TCP, port: {{ .Values.controlPlane.internalPort }}}
+    {{- else if $np.controlPlaneNamespace }}
+    - to:
+        - namespaceSelector:
+            matchLabels: {kubernetes.io/metadata.name: {{ $np.controlPlaneNamespace }}}
+          podSelector:
+            matchLabels: {app.kubernetes.io/component: control-plane}
+      ports:
+        - {protocol: TCP, port: {{ .Values.controlPlane.port }}}
+        - {protocol: TCP, port: {{ .Values.controlPlane.internalPort }}}
+    {{- end }}
+    {{- if .Values.aiGateway.enabled }}
+    - to:
+        {{- include "gp.np.from" (dict "root" $ "component" "redaction") | nindent 8 }}
+      ports:
+        - {protocol: TCP, port: {{ .Values.aiGateway.redaction.port }}}
+    # project-service: `python -m app.cli ai-gateway-credentials` (one-time setup)
+    - to:
+        {{- include "gp.np.from" (dict "root" $ "component" "project-service") | nindent 8 }}
+      ports:
+        - {protocol: TCP, port: {{ .Values.aiGateway.projectService.port }}}
+    {{- end }}
+    {{- if .Values.postgresql.enabled }}
+    - to:
+        {{- include "gp.np.from" (dict "root" $ "component" "postgres") | nindent 8 }}
+      ports:
+        - {protocol: TCP, port: {{ .Values.postgresql.port }}}
+    {{- end }}
+    {{- if .Values.redis.enabled }}
+    - to:
+        {{- include "gp.np.from" (dict "root" $ "component" "redis") | nindent 8 }}
+      ports:
+        - {protocol: TCP, port: 6379}
+    {{- end }}
+{{- end }}
+{{- if .Values.controlPlane.enabled }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "gp.name" (dict "root" $ "component" "control-plane") }}
+  labels: {{- include "gp.labels" (dict "root" $ "component" "network") | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/component: control-plane
+  policyTypes: [Ingress, Egress]
+  ingress:
+    # console and admin API through the ingress controller
+    - from:
+        {{- include "gp.np.ns" $np.ingressControllerNamespace | nindent 8 }}
+      ports:
+        - {protocol: TCP, port: {{ .Values.controlPlane.port }}}
+    # gateways: this release's, and other environments' releases in remoteGatewayNamespaces
+    - from:
+        {{- include "gp.np.from" (dict "root" $ "component" "gateway") | nindent 8 }}
+        {{- range $np.remoteGatewayNamespaces }}
+        - namespaceSelector:
+            matchLabels: {kubernetes.io/metadata.name: {{ . }}}
+          podSelector:
+            matchLabels: {app.kubernetes.io/component: gateway}
+        {{- end }}
+      ports:
+        - {protocol: TCP, port: {{ .Values.controlPlane.port }}}
+        - {protocol: TCP, port: {{ .Values.controlPlane.internalPort }}}
+    {{- if $np.prometheusNamespace }}
+    - from:
+        {{- include "gp.np.ns" $np.prometheusNamespace | nindent 8 }}
+      ports:
+        - {protocol: TCP, port: {{ .Values.controlPlane.port }}}
+    {{- end }}
+  egress:
+    {{- if .Values.gateway.enabled }}
+    - to:
+        {{- include "gp.np.from" (dict "root" $ "component" "gateway") | nindent 8 }}
+      ports:
+        - {protocol: TCP, port: {{ .Values.gateway.port }}}
+        - {protocol: TCP, port: {{ .Values.gateway.internalPort }}}
+    {{- end }}
+    {{- if .Values.postgresql.enabled }}
+    - to:
+        {{- include "gp.np.from" (dict "root" $ "component" "postgres") | nindent 8 }}
+      ports:
+        - {protocol: TCP, port: {{ .Values.postgresql.port }}}
+    {{- end }}
+    {{- if .Values.redis.enabled }}
+    - to:
+        {{- include "gp.np.from" (dict "root" $ "component" "redis") | nindent 8 }}
+      ports:
+        - {protocol: TCP, port: 6379}
+    {{- end }}
+{{- end }}
+{{- if .Values.aiGateway.enabled }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "gp.name" (dict "root" $ "component" "ai-gateway") }}
+  labels: {{- include "gp.labels" (dict "root" $ "component" "network") | nindent 4 }}
+spec:
+  podSelector:
+    matchExpressions:
+      - {key: app.kubernetes.io/instance, operator: In, values: [{{ .Release.Name | quote }}]}
+      - {key: app.kubernetes.io/component, operator: In, values: [redaction, project-service]}
+  policyTypes: [Ingress, Egress]
+  ingress:
+    # redaction: called by the gateway; project-service: called by redaction (and admins via port-forward)
+    - from:
+        {{- include "gp.np.from" (dict "root" $ "component" "gateway") | nindent 8 }}
+        {{- include "gp.np.from" (dict "root" $ "component" "redaction") | nindent 8 }}
+      ports:
+        - {protocol: TCP, port: {{ .Values.aiGateway.redaction.port }}}
+        - {protocol: TCP, port: {{ .Values.aiGateway.projectService.port }}}
+  egress:
+    - to:
+        {{- include "gp.np.from" (dict "root" $ "component" "project-service") | nindent 8 }}
+      ports:
+        - {protocol: TCP, port: {{ .Values.aiGateway.projectService.port }}}
+    {{- if .Values.postgresql.enabled }}
+    - to:
+        {{- include "gp.np.from" (dict "root" $ "component" "postgres") | nindent 8 }}
+      ports:
+        - {protocol: TCP, port: {{ .Values.postgresql.port }}}
+    {{- end }}
+    {{- if .Values.redis.enabled }}
+    - to:
+        {{- include "gp.np.from" (dict "root" $ "component" "redis") | nindent 8 }}
+      ports:
+        - {protocol: TCP, port: 6379}
+    {{- end }}
+{{- end }}
+{{- if or .Values.postgresql.enabled .Values.redis.enabled }}
+---
+# Data stores accept connections from this release's services only.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "gp.name" (dict "root" $ "component" "datastores") }}
+  labels: {{- include "gp.labels" (dict "root" $ "component" "network") | nindent 4 }}
+spec:
+  podSelector:
+    matchExpressions:
+      - {key: app.kubernetes.io/instance, operator: In, values: [{{ .Release.Name | quote }}]}
+      - {key: app.kubernetes.io/component, operator: In, values: [postgres, redis]}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchExpressions:
+              - {key: app.kubernetes.io/instance, operator: In, values: [{{ .Release.Name | quote }}]}
+              - {key: app.kubernetes.io/component, operator: In, values: [gateway, control-plane, redaction, project-service, audit-retention]}
+      ports:
+        - {protocol: TCP, port: {{ .Values.postgresql.port }}}
+        - {protocol: TCP, port: 6379}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "gp.name" (dict "root" $ "component" "audit-retention") }}
+  labels: {{- include "gp.labels" (dict "root" $ "component" "network") | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/component: audit-retention
+  policyTypes: [Egress]
+  egress:
+    - to:
+        {{- include "gp.np.from" (dict "root" $ "component" "postgres") | nindent 8 }}
+      ports:
+        - {protocol: TCP, port: {{ .Values.postgresql.port }}}
+{{- end }}
+{{- if $np.externalEgressCIDRs }}
+---
+# Outside the cluster: external Postgres/Redis, the LLM provider (proxy mode), remote guardrails.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "gp.name" (dict "root" $ "component" "external-egress") }}
+  labels: {{- include "gp.labels" (dict "root" $ "component" "network") | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels: {{- toYaml $sel | nindent 6 }}
+  policyTypes: [Egress]
+  egress:
+    - to:
+        {{- range $np.externalEgressCIDRs }}
+        - ipBlock: {cidr: {{ . }}}
+        {{- end }}
+{{- end }}
+{{- if eq .Values.mtls.mode "linkerd" }}
+---
+# Linkerd: meshed traffic arrives on the proxy's inbound port (4143), and proxies talk to the
+# Linkerd control plane (identity, destination, policy).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "gp.name" (dict "root" $ "component" "linkerd") }}
+  labels: {{- include "gp.labels" (dict "root" $ "component" "network") | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels: {{- toYaml $sel | nindent 6 }}
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - podSelector: {}
+        {{- include "gp.np.ns" $np.ingressControllerNamespace | nindent 8 }}
+      ports:
+        - {protocol: TCP, port: 4143}
+  egress:
+    - to:
+        - podSelector: {}
+      ports:
+        - {protocol: TCP, port: 4143}
+    - to:
+        {{- include "gp.np.ns" "linkerd" | nindent 8 }}
+{{- end }}
+---
+# `helm test`: the test pod may call the gateway and the control plane.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "gp.name" (dict "root" $ "component" "helm-test") }}
+  labels: {{- include "gp.labels" (dict "root" $ "component" "network") | nindent 4 }}
+spec:
+  podSelector:
+    matchExpressions:
+      - {key: app.kubernetes.io/instance, operator: In, values: [{{ .Release.Name | quote }}]}
+      - {key: app.kubernetes.io/component, operator: In, values: [gateway, control-plane]}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        {{- include "gp.np.from" (dict "root" $ "component" "helm-test") | nindent 8 }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "gp.name" (dict "root" $ "component" "helm-test-egress") }}
+  labels: {{- include "gp.labels" (dict "root" $ "component" "network") | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/component: helm-test
+  policyTypes: [Egress]
+  egress:
+    - to:
+        {{- include "gp.np.from" (dict "root" $ "component" "gateway") | nindent 8 }}
+        {{- include "gp.np.from" (dict "root" $ "component" "control-plane") | nindent 8 }}
+{{- end }}

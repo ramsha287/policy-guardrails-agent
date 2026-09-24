@@ -1,0 +1,129 @@
+# Alert rules for the guardrail platform. Used as-is by a plain Prometheus (rule_files) and as
+# the spec of the chart's PrometheusRule (monitoring.prometheusRule.enabled).
+# Each alert links to its runbook in docs/runbooks/.
+groups:
+  - name: guardrail-gateway
+    rules:
+      - alert: GuardrailGatewayDown
+        expr: absent(guardrail_snapshot_loaded)
+        for: 5m
+        labels: {severity: critical}
+        annotations:
+          summary: No guardrail gateway is reporting metrics
+          description: Agents that call the gateway are failing closed (or not being guarded at all if they bypass it).
+          runbook_url: https://github.com/ramsha287/policy-guardrails-agent/blob/main/docs/runbooks/gateway-down.md
+      - alert: GuardrailNoSnapshotLoaded
+        expr: min by (pod) (guardrail_snapshot_loaded) == 0
+        for: 2m
+        labels: {severity: critical}
+        annotations:
+          summary: "Gateway {{ $labels.pod }} has no guardrail snapshot and refuses every request (fail-closed)"
+          description: It could not get a snapshot from the control plane or its disk cache, or every snapshot failed to compile.
+          runbook_url: https://github.com/ramsha287/policy-guardrails-agent/blob/main/docs/runbooks/no-snapshot.md
+      - alert: GuardrailLatencyBudgetExceeded
+        expr: histogram_quantile(0.95, sum by (le, stage) (rate(guardrail_request_latency_ms_bucket[5m]))) > 500
+        for: 10m
+        labels: {severity: warning}
+        annotations:
+          summary: "p95 guard latency on the {{ $labels.stage }} stage is {{ $value | humanize }} ms (budget 500 ms per turn)"
+          description: Agents feel this directly. Check which guardrail is slow on the dashboard's per-guardrail latency panel.
+          runbook_url: https://github.com/ramsha287/policy-guardrails-agent/blob/main/docs/runbooks/latency.md
+      - alert: GuardrailErrorRateHigh
+        expr: |
+          sum by (id) (rate(guardrail_errors_total[5m]))
+            / clamp_min(sum by (id) (rate(guardrail_decisions_total[5m])), 1e-9) > 0.02
+        for: 10m
+        labels: {severity: warning}
+        annotations:
+          summary: "Guardrail {{ $labels.id }} fails or times out on {{ $value | humanizePercentage }} of calls"
+          description: Errors follow the assignment's failure mode; with fail_closed (the default) these requests are blocked.
+          runbook_url: https://github.com/ramsha287/policy-guardrails-agent/blob/main/docs/runbooks/guardrail-errors.md
+      - alert: GuardrailBlockRateSpike
+        expr: |
+          sum(rate(guardrail_requests_total{decision="block"}[15m]))
+            / clamp_min(sum(rate(guardrail_requests_total[15m])), 1e-9) > 0.2
+          and sum(rate(guardrail_requests_total[15m])) > 0.1
+        for: 15m
+        labels: {severity: warning}
+        annotations:
+          summary: "{{ $value | humanizePercentage }} of guard requests are blocked"
+          description: Either an attack or a bad change (a new guardrail enforcing too early, a policy edit). Compare with recent publishes.
+          runbook_url: https://github.com/ramsha287/policy-guardrails-agent/blob/main/docs/runbooks/block-rate.md
+      - alert: AuditEventsDropped
+        expr: increase(audit_events_dropped_total[10m]) > 0
+        labels: {severity: critical}
+        annotations:
+          summary: "{{ $value | humanize }} audit events were lost on {{ $labels.pod }}"
+          description: Postgres was unavailable and the disk spool was full or unwritable. Decisions still happened but are not in the audit log.
+          runbook_url: https://github.com/ramsha287/policy-guardrails-agent/blob/main/docs/runbooks/audit.md
+      - alert: AuditSpoolBacklog
+        expr: max by (pod) (audit_spool_bytes) > 0
+        for: 15m
+        labels: {severity: warning}
+        annotations:
+          summary: "Audit events are waiting on disk on {{ $labels.pod }} ({{ $value | humanize1024 }}B)"
+          description: Postgres has not accepted audit writes for a while. They are replayed automatically once it does.
+          runbook_url: https://github.com/ramsha287/policy-guardrails-agent/blob/main/docs/runbooks/audit.md
+      - alert: GatewayCannotReachControlPlane
+        expr: min by (pod) (guardrail_control_plane_reachable) == 0
+        for: 10m
+        labels: {severity: warning}
+        annotations:
+          summary: "Gateway {{ $labels.pod }} can't reach the control plane"
+          description: It keeps serving its last snapshot and catalog, but new publishes, key revocations and reviews don't reach it.
+          runbook_url: https://github.com/ramsha287/policy-guardrails-agent/blob/main/docs/runbooks/control-plane-unreachable.md
+      - alert: GatewayRateLimiting
+        expr: sum by (tenant_id) (rate(guardrail_rate_limited_total[10m])) > 1
+        for: 10m
+        labels: {severity: info}
+        annotations:
+          summary: "Tenant {{ $labels.tenant_id }} is being rate limited ({{ $value | humanize }}/s refused)"
+          runbook_url: https://github.com/ramsha287/policy-guardrails-agent/blob/main/docs/runbooks/rate-limits.md
+  - name: guardrail-control-plane
+    rules:
+      - alert: ControlPlaneDown
+        expr: absent(cp_reviews_pending)
+        for: 10m
+        labels: {severity: critical}
+        annotations:
+          summary: The control plane is not reporting metrics
+          description: Gateways keep running on cached configuration, but escalated requests can't be held for review (they are blocked) and nothing can be published.
+          runbook_url: https://github.com/ramsha287/policy-guardrails-agent/blob/main/docs/runbooks/control-plane-unreachable.md
+      - alert: ReviewWaitingTooLong
+        expr: max(cp_reviews_oldest_pending_seconds) > 600
+        for: 1m
+        labels: {severity: warning}
+        annotations:
+          summary: "A held request has waited {{ $value | humanizeDuration }} for a reviewer"
+          description: It is blocked automatically when the review TTL (15 minutes by default) runs out.
+          runbook_url: https://github.com/ramsha287/policy-guardrails-agent/blob/main/docs/runbooks/review-queue.md
+      - alert: ReviewsExpiringUndecided
+        expr: delta(cp_reviews_expired_undecided[30m]) > 0
+        labels: {severity: warning}
+        annotations:
+          summary: "{{ $value | humanize }} held requests expired without a decision in the last 30 minutes"
+          description: Their agents got BLOCK. Check reviewer coverage for the affected tenants.
+          runbook_url: https://github.com/ramsha287/policy-guardrails-agent/blob/main/docs/runbooks/review-queue.md
+      - alert: PublishWaitingForApproval
+        expr: max(cp_publish_requests_pending) > 0
+        for: 4h
+        labels: {severity: info}
+        annotations:
+          summary: A production publish or rollback has waited over 4 hours for a second approver
+          runbook_url: https://github.com/ramsha287/policy-guardrails-agent/blob/main/docs/runbooks/publishing.md
+      - alert: GatewaysStale
+        expr: max by (environment) (cp_gateways{state="stale"}) > 0
+        for: 10m
+        labels: {severity: warning}
+        annotations:
+          summary: "{{ $value }} gateway(s) in {{ $labels.environment }} stopped sending heartbeats"
+          description: Publishing checks installed guardrails against live gateways only, so a stale gateway is ignored. Remove it or bring it back.
+          runbook_url: https://github.com/ramsha287/policy-guardrails-agent/blob/main/docs/runbooks/control-plane-unreachable.md
+      - alert: GatewaysBehindSnapshot
+        expr: max by (environment) (cp_gateways_behind) > 0
+        for: 15m
+        labels: {severity: warning}
+        annotations:
+          summary: "{{ $value }} live gateway(s) in {{ $labels.environment }} are not on the current snapshot"
+          description: Usually a snapshot that doesn't compile on those gateways (a missing guardrail version or ${VAR}). Their last_error in the console says why.
+          runbook_url: https://github.com/ramsha287/policy-guardrails-agent/blob/main/docs/runbooks/no-snapshot.md

@@ -1,0 +1,15 @@
+apiVersion: v2
+name: guardrail-platform
+description: >-
+  Guardrail platform for AI agents: gateway (with OPA sidecar), control plane and console,
+  the AI Security Gateway (PII redaction), and optionally Postgres and Redis. Built for k3s;
+  only standard Kubernetes APIs unless you turn on the optional cert-manager or Prometheus
+  Operator integrations.
+type: application
+version: 0.5.0
+appVersion: "0.5.0"
+kubeVersion: ">=1.27.0-0"
+keywords: [guardrails, ai-agents, llm, security, pii]
+home: https://github.com/ramsha287/policy-guardrails-agent
+sources:
+  - https://github.com/ramsha287/policy-guardrails-agent

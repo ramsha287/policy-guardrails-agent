@@ -1,0 +1,157 @@
+{{- if .Values.aiGateway.enabled }}
+{{- $ps := .Values.aiGateway.projectService -}}
+{{- $rd := .Values.aiGateway.redaction -}}
+{{- $cps := dict "root" $ "component" "project-service" -}}
+{{- $crd := dict "root" $ "component" "redaction" -}}
+{{- /* The ai-gateway images run as root by default; the pod security context runs them as 10001
+       with a read-only root filesystem. HOME=/tmp gives Presidio/tldextract a writable cache. */ -}}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "gp.name" $cps }}
+  labels: {{- include "gp.labels" $cps | nindent 4 }}
+spec:
+  selector: {{- include "gp.selectorLabels" $cps | nindent 4 }}
+  ports:
+    - {name: http, port: {{ $ps.port }}, targetPort: http}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "gp.name" $cps }}
+  labels: {{- include "gp.labels" $cps | nindent 4 }}
+spec:
+  replicas: {{ $ps.replicas }}
+  strategy:
+    type: Recreate   # migrations run at start (image CMD); never two versions at once
+  selector:
+    matchLabels: {{- include "gp.selectorLabels" $cps | nindent 6 }}
+  template:
+    metadata:
+      labels: {{- include "gp.labels" $cps | nindent 8 }}
+      {{- $ann := include "gp.podAnnotations" (dict "root" $) }}
+      {{- if $ann }}
+      annotations: {{- $ann | nindent 8 }}
+      {{- end }}
+    spec:
+      automountServiceAccountToken: false
+      securityContext: {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      {{- include "gp.scheduling" $ | nindent 6 }}
+      containers:
+        - name: project-service
+          image: {{ include "gp.image" (dict "root" $ "image" $ps.image) }}
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          ports:
+            - {name: http, containerPort: {{ $ps.port }}}
+          env:
+            - {name: HOME, value: /tmp}
+            - {name: LOG_LEVEL, value: {{ .Values.global.logLevel | quote }}}
+            {{- include "gp.dsnEnv" (dict "root" $ "key" "AI_GATEWAY_POSTGRES_DSN") | nindent 12 }}
+            {{- include "gp.redisEnv" (dict "root" $ "db" 1) | nindent 12 }}
+          readinessProbe:
+            httpGet: {path: /ai-gateway/project/api/health, port: http}
+            periodSeconds: 5
+          livenessProbe:
+            httpGet: {path: /ai-gateway/project/api/health, port: http}
+            periodSeconds: 15
+            initialDelaySeconds: 20
+          resources: {{- toYaml $ps.resources | nindent 12 }}
+          securityContext: {{- toYaml .Values.containerSecurityContext | nindent 12 }}
+          volumeMounts:
+            - {name: tmp, mountPath: /tmp}
+      volumes:
+        - name: tmp
+          emptyDir: {sizeLimit: 64Mi}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "gp.name" $crd }}
+  labels: {{- include "gp.labels" $crd | nindent 4 }}
+spec:
+  selector: {{- include "gp.selectorLabels" $crd | nindent 4 }}
+  ports:
+    - {name: http, port: {{ $rd.port }}, targetPort: http}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "gp.name" $crd }}
+  labels: {{- include "gp.labels" $crd | nindent 4 }}
+spec:
+  {{- if not $rd.autoscaling.enabled }}
+  replicas: {{ $rd.replicas }}
+  {{- end }}
+  strategy:
+    rollingUpdate: {maxSurge: 1, maxUnavailable: 0}
+  selector:
+    matchLabels: {{- include "gp.selectorLabels" $crd | nindent 6 }}
+  template:
+    metadata:
+      labels: {{- include "gp.labels" $crd | nindent 8 }}
+      {{- $ann := include "gp.podAnnotations" (dict "root" $) }}
+      {{- if $ann }}
+      annotations: {{- $ann | nindent 8 }}
+      {{- end }}
+    spec:
+      automountServiceAccountToken: false
+      securityContext: {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      {{- include "gp.scheduling" $ | nindent 6 }}
+      containers:
+        - name: redaction
+          image: {{ include "gp.image" (dict "root" $ "image" $rd.image) }}
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          ports:
+            - {name: http, containerPort: {{ $rd.port }}}
+          env:
+            - {name: HOME, value: /tmp}
+            - {name: LOG_LEVEL, value: {{ .Values.global.logLevel | quote }}}
+            {{- include "gp.dsnEnv" (dict "root" $ "key" "AI_GATEWAY_POSTGRES_DSN") | nindent 12 }}
+            {{- include "gp.redisEnv" (dict "root" $ "db" 1) | nindent 12 }}
+            - name: PROJECT_SERVICE_URL
+              value: {{ printf "http://%s:%v" (include "gp.name" $cps) $ps.port | quote }}
+            - {name: ANALYZER_WORKERS, value: {{ $rd.analyzerWorkers | quote }}}
+            - {name: PROJECT_CACHE_TTL_SECONDS, value: {{ $rd.projectCacheTtlSeconds | quote }}}
+            - {name: RATE_LIMIT_CLIENT_PER_MINUTE, value: {{ $rd.rateLimitClientPerMinute | quote }}}
+            - {name: RATE_LIMIT_SERVICE_PER_MINUTE, value: {{ $rd.rateLimitServicePerMinute | quote }}}
+            {{- include "gp.secretEnv" (dict "root" $ "name" "HASH_SECRET") | nindent 12 }}
+          startupProbe:
+            # spaCy en_core_web_lg takes a while to load
+            httpGet: {path: /ai-gateway/redact/api/ready, port: http}
+            periodSeconds: 5
+            failureThreshold: 60
+          readinessProbe:
+            httpGet: {path: /ai-gateway/redact/api/ready, port: http}
+            periodSeconds: 5
+          livenessProbe:
+            httpGet: {path: /ai-gateway/redact/api/ready, port: http}
+            periodSeconds: 15
+            failureThreshold: 4
+          resources: {{- toYaml $rd.resources | nindent 12 }}
+          securityContext: {{- toYaml .Values.containerSecurityContext | nindent 12 }}
+          volumeMounts:
+            - {name: tmp, mountPath: /tmp}
+      volumes:
+        - name: tmp
+          emptyDir: {sizeLimit: 256Mi}
+{{- if $rd.autoscaling.enabled }}
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: {{ include "gp.name" $crd }}
+  labels: {{- include "gp.labels" $crd | nindent 4 }}
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: {{ include "gp.name" $crd }}
+  minReplicas: {{ $rd.autoscaling.minReplicas }}
+  maxReplicas: {{ $rd.autoscaling.maxReplicas }}
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target: {type: Utilization, averageUtilization: {{ $rd.autoscaling.targetCPUUtilizationPercentage }}}
+{{- end }}
+{{- end }}

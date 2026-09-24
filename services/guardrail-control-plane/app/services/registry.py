@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from typing import Any
 
+import yaml
 from pydantic import ValidationError
 
 from guardrail_sdk.manifest import Manifest
@@ -19,6 +20,19 @@ from ..domain.records import GuardrailVersionRecord
 from ..errors import NotFound, ValidationFailed
 from ..store.base import Conflict
 from .context import Ctx
+
+
+def load_manifest_yaml(text: str) -> dict[str, Any]:
+    """guardrail.yaml text -> dict (safe loader only)."""
+    try:
+        data = yaml.safe_load(text)
+    except yaml.YAMLError as exc:
+        mark = getattr(exc, "problem_mark", None)
+        where = f" at line {mark.line + 1}" if mark is not None else ""
+        raise ValidationFailed("manifest is not valid YAML", [f"YAML error{where}"]) from exc
+    if not isinstance(data, dict):
+        raise ValidationFailed("manifest must be a YAML mapping", ["top level is not a mapping"])
+    return data
 
 
 def parse_manifest(raw: dict[str, Any]) -> Manifest:

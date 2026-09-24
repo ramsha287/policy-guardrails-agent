@@ -5,10 +5,11 @@ from __future__ import annotations
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from ...domain.rbac import Principal
 from ...services.publishing import PublishOutcome
+from ...services.registry import load_manifest_yaml
 from ..container import Container
 from ..deps import container, principal
 
@@ -16,8 +17,17 @@ router = APIRouter(tags=["pipeline"])
 
 
 class VersionIn(BaseModel):
-    manifest: dict[str, Any]
+    """A guardrail manifest as JSON (`manifest`) or as the guardrail.yaml text (`manifest_yaml`)."""
+
+    manifest: dict[str, Any] | None = None
+    manifest_yaml: str | None = Field(None, max_length=200_000)
     conformance_report: dict[str, Any] | None = None
+
+    @model_validator(mode="after")
+    def _one_manifest(self) -> VersionIn:
+        if (self.manifest is None) == (self.manifest_yaml is None):
+            raise ValueError("send exactly one of manifest or manifest_yaml")
+        return self
 
 
 class PublishIn(BaseModel):
@@ -52,7 +62,8 @@ def _snapshot(s: Any, with_document: bool = False) -> dict[str, Any]:
 
 @router.post("/guardrails/versions", status_code=201)
 async def register_version(body: VersionIn, p: Principal = Depends(principal), c: Container = Depends(container)):
-    rec = await c.registry.register(p, body.manifest, conformance_report=body.conformance_report)
+    raw = body.manifest if body.manifest is not None else load_manifest_yaml(body.manifest_yaml or "")
+    rec = await c.registry.register(p, raw, conformance_report=body.conformance_report)
     return rec.model_dump(mode="json")
 
 

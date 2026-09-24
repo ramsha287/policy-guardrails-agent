@@ -51,6 +51,25 @@ class Settings(BaseSettings):
     audit_batch_size: int = Field(200, alias="AUDIT_BATCH_SIZE")
     audit_flush_seconds: float = Field(1.0, alias="AUDIT_FLUSH_SECONDS")
     audit_retention_months: int = Field(12, alias="AUDIT_RETENTION_MONTHS")
+    # Run audit partition maintenance (create next months, drop past retention) in this process.
+    # Turn off when a CronJob runs `python -m app.cli partitions` instead (Helm does).
+    audit_maintenance: bool = Field(True, alias="AUDIT_MAINTENANCE")
+    # Disk spool for audit events the database can't take (outage, full queue); replayed later.
+    # Empty string disables it (events are then dropped and counted instead).
+    audit_spool_dir: str = Field("/var/cache/guardrail-gateway/audit-spool", alias="AUDIT_SPOOL_DIR")
+    audit_spool_max_mb: int = Field(512, ge=1, alias="AUDIT_SPOOL_MAX_MB")
+
+    # Per-API-key rate limit for /v1/guard and the proxy, per replica (0 = unlimited). A key's
+    # rate_limit_per_minute in the control-plane catalog overrides it.
+    guard_rate_limit_per_minute: int = Field(0, ge=0, alias="GUARD_RATE_LIMIT_PER_MINUTE")
+
+    # Proxy mode: OpenAI-compatible /v1/chat/completions with the input/output/tool stages applied.
+    proxy_enabled: bool = Field(False, alias="PROXY_ENABLED")
+    proxy_upstream_url: str = Field("https://api.openai.com/v1", alias="PROXY_UPSTREAM_URL")
+    proxy_upstream_api_key: str | None = Field(None, alias="PROXY_UPSTREAM_API_KEY")  # the provider key
+    proxy_default_agent_id: str = Field("proxy", alias="PROXY_DEFAULT_AGENT_ID")
+    proxy_models: list[str] = Field(default_factory=list, alias="PROXY_MODELS")  # empty = any model
+    proxy_timeout_seconds: float = Field(120.0, gt=0, alias="PROXY_TIMEOUT_SECONDS")
 
     # Optional
     redis_url: str | None = Field(None, alias="REDIS_URL")

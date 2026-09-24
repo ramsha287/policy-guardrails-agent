@@ -77,3 +77,63 @@ async def test_history_tables_are_append_only(migrated):
                 await conn.execute(text("UPDATE control.change_log SET actor = 'tamper'"))
     finally:
         await engine.dispose()
+
+
+async def test_analytics_sql_on_postgres():
+    """The analytics queries against an audit table shaped like the gateway's (columns they use)."""
+    import json
+    from datetime import UTC, datetime, timedelta
+
+    from sqlalchemy import text
+
+    from app.db.session import make_engine, make_sessionmaker
+    from app.services.analytics import AnalyticsService
+    from tests.helpers import ALICE
+
+    engine = make_engine(DSN)
+    async with engine.begin() as conn:
+        await conn.execute(text("CREATE SCHEMA IF NOT EXISTS audit"))
+        await conn.execute(text("DROP TABLE IF EXISTS audit.audit_events"))
+        await conn.execute(
+            text(
+                "CREATE TABLE audit.audit_events (created_at timestamptz NOT NULL, tenant_id varchar(64) NOT NULL,"
+                " stage varchar(16) NOT NULL, environment varchar(16) NOT NULL, decision varchar(16) NOT NULL,"
+                " policy_allow boolean NOT NULL, guardrail_results jsonb NOT NULL DEFAULT '[]',"
+                " latency_ms double precision NOT NULL)"
+            )
+        )
+        result = {
+            "guardrail_id": "ai-gateway-pii",
+            "version": "1.1.0",
+            "decision": "modify",
+            "mode": "enforce",
+            "latency_ms": 12.5,
+            "error": None,
+        }
+        now = datetime.now(UTC)
+        for created, env, allow, results in (
+            (now - timedelta(hours=1), "dev", True, [result]),
+            (now - timedelta(hours=2), "dev", False, []),
+            (now - timedelta(days=40), "dev", True, [result]),
+        ):
+            await conn.execute(
+                text("INSERT INTO audit.audit_events VALUES (:c, 'acme', 'input', :e, :d, :a, CAST(:r AS jsonb), 20)"),
+                {"c": created, "e": env, "d": "modify" if allow else "block", "a": allow, "r": json.dumps(results)},
+            )
+    sm = make_sessionmaker(engine)
+
+    async def fetch(sql, params):
+        async with sm() as s:
+            return [dict(r) for r in (await s.execute(text(sql), params)).mappings().all()]
+
+    try:
+        out = await AnalyticsService(fetch).guardrails(ALICE, environment="dev", tenant_id="acme", hours=24)
+        assert out["summary"]["requests"] == 2 and out["summary"]["policy_denied"] == 1
+        assert out["rows"][0]["n"] == 1 and out["rows"][0]["p95_latency_ms"] == 12.5
+        assert sum(p["requests"] for p in out["timeseries"]) == 2
+        everything = await AnalyticsService(fetch).guardrails(ALICE, hours=24 * 60)
+        assert everything["summary"]["requests"] == 3
+    finally:
+        async with engine.begin() as conn:
+            await conn.execute(text("DROP SCHEMA audit CASCADE"))
+        await engine.dispose()

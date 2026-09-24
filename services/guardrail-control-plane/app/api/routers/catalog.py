@@ -30,6 +30,11 @@ class ApiKeyIn(BaseModel):
     scopes: list[str] = Field(default_factory=lambda: ["guard:invoke"])
     environments: list[Environment] | None = None
     expires_at: datetime | None = None
+    rate_limit_per_minute: int | None = Field(default=None, ge=0, le=1_000_000)
+
+
+class ApiKeyPatch(BaseModel):
+    rate_limit_per_minute: int | None = Field(default=None, ge=0, le=1_000_000)
 
 
 class AgentIn(BaseModel):
@@ -75,13 +80,22 @@ async def patch_tenant(
 async def create_api_key(
     tenant_id: str, body: ApiKeyIn, p: Principal = Depends(principal), c: Container = Depends(container)
 ):
-    key, raw = await c.catalog.create_api_key(p, tenant_id, body.name, body.scopes, body.environments, body.expires_at)
+    key, raw = await c.catalog.create_api_key(
+        p, tenant_id, body.name, body.scopes, body.environments, body.expires_at, body.rate_limit_per_minute
+    )
     return {**_key_out(key), "key": raw, "note": "Store this key now; only its hash is kept."}
 
 
 @router.get("/tenants/{tenant_id}/api-keys")
 async def list_api_keys(tenant_id: str, p: Principal = Depends(principal), c: Container = Depends(container)):
     return [_key_out(k) for k in await c.catalog.list_api_keys(p, tenant_id)]
+
+
+@router.patch("/tenants/{tenant_id}/api-keys/{key_id}")
+async def patch_api_key(
+    tenant_id: str, key_id: str, body: ApiKeyPatch, p: Principal = Depends(principal), c: Container = Depends(container)
+):
+    return _key_out(await c.catalog.set_api_key_rate_limit(p, tenant_id, key_id, body.rate_limit_per_minute))
 
 
 @router.delete("/tenants/{tenant_id}/api-keys/{key_id}")

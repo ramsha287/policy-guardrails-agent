@@ -91,10 +91,19 @@ Ship the guardrail in the gateway image first, so the gateways report it in thei
 register the version with the control plane, add a **shadow** assignment and publish it. Full API:
 [control-plane.md](control-plane.md).
 
+**In the console**: Guardrails → *Register a version* (paste `guardrail.yaml`; remote guardrails
+only, since local ones are registered by the gateways) → Pipeline → *Add assignment* in shadow
+mode → Simulate → *Review & publish*. Watch *Decisions: enforce vs shadow* on the Grafana
+dashboard or in Analytics, then switch the mode to `enforce` and publish again. Production
+needs a second admin to approve under Publish approvals.
+
+Or with the API:
+
 ```bash
 CP=localhost:8200/cp/v1; A="X-Admin-Key: $CP_ADMIN_KEY"; J='content-type: application/json'
 # 1. register the manifest (attach the conformance report if you have one)
-curl -s -XPOST $CP/guardrails/versions -H "$A" -H "$J" -d "{\"manifest\": $(python -c 'import yaml,json;print(json.dumps(yaml.safe_load(open("guardrail.yaml"))))')}"
+python -c 'import json;print(json.dumps({"manifest_yaml": open("guardrail.yaml").read()}))' \
+  | curl -s -XPOST $CP/guardrails/versions -H "$A" -H "$J" -d @-
 # 2. assign it in shadow mode
 curl -s -XPUT $CP/environments/staging/assignments/global-prompt-injection -H "$A" -H "$J" -d '{
   "guardrail_id": "prompt-injection", "guardrail_version": "1.0.0", "scope_type": "global",

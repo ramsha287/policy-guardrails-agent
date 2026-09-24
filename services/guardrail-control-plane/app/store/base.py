@@ -8,6 +8,7 @@ atomic operation; `transaction()` groups several into one.
 from __future__ import annotations
 
 from contextlib import AbstractAsyncContextManager
+from datetime import datetime
 from typing import Protocol
 
 from ..domain.records import (
@@ -94,6 +95,18 @@ class Store(Protocol):
     async def add_review(self, review: ReviewRecord) -> None: ...
     async def get_review(self, review_id: str) -> ReviewRecord | None: ...
     async def put_review(self, review: ReviewRecord) -> None: ...
+    async def decide_review(
+        self, review_id: str, *, status: str, reviewer: str, decided_at: datetime, decision_note: str
+    ) -> bool:
+        """Atomically decide a review that is still pending and not expired at `decided_at`.
+
+        False if it was decided or expired in the meantime (nothing is overwritten)."""
+        ...
+
+    async def add_review_raw_viewer(self, review_id: str, actor: str) -> None:
+        """Atomically append to raw_viewed_by (never rewrites the rest of the review)."""
+        ...
+
     async def list_reviews(
         self, tenant_id: str | None = None, status: str | None = None, limit: int = 100
     ) -> list[ReviewRecord]: ...

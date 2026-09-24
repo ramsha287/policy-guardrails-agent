@@ -2,17 +2,16 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Response
+from fastapi import APIRouter, Depends, Query, Response
 from pydantic import BaseModel, Field
 
 from guardrail_sdk.api import GuardRequest
-from guardrail_sdk.documents import SnapshotDoc
 from guardrail_sdk.models import Stage
 
-from ...domain.compiler import compile_snapshot
-from ...domain.rbac import Permission, Principal
+from ...domain.rbac import PLATFORM_ONLY, Permission, Principal
+from ...domain.records import ENVIRONMENTS, Environment
 from ..container import Container
 from ..deps import container, principal
 
@@ -30,8 +29,8 @@ class AdminKeyIn(BaseModel):
 
 
 class SimulateIn(BaseModel):
-    environment: str
-    source: str = Field("working", pattern="^(working|current)$")
+    environment: Environment
+    source: Literal["working", "current"] = "working"
     tenant_id: str
     stage: Stage
     request: GuardRequest
@@ -39,6 +38,29 @@ class SimulateIn(BaseModel):
 
 def _review_out(r: Any, status: str) -> dict[str, Any]:
     return {**r.model_dump(mode="json", exclude={"payload_enc"}), "status": status}
+
+
+# ---- who am I (the console uses this to show only what the key can do) ------------------------
+
+
+@router.get("/me")
+async def me(p: Principal = Depends(principal), c: Container = Depends(container)):
+    policy = c.ctx.policy
+    return {
+        "key_id": p.key_id,
+        "name": p.name,
+        "roles": sorted(p.roles),
+        "tenant_id": p.tenant_id,
+        "platform": p.is_platform,
+        "permissions": sorted(perm.value for perm in p.permissions() if p.is_platform or perm not in PLATFORM_ONLY),
+        "environments": list(ENVIRONMENTS),
+        "two_person_environments": sorted(policy.two_person_environments),
+        "review_ttl_minutes": policy.review_ttl_minutes,
+        "features": {
+            "simulate": bool(c.gateway_url or c.gateway_urls),
+            "analytics": c.analytics_fetch is not None,
+        },
+    }
 
 
 # ---- review queue -----------------------------------------------------------------------------
@@ -125,35 +147,14 @@ async def revoke_admin_key(key_id: str, p: Principal = Depends(principal), c: Co
 async def simulate(body: SimulateIn, p: Principal = Depends(principal), c: Container = Depends(container)):
     """Run a request through a draft (working set) or the live snapshot on a real gateway, without
     enforcing or auditing it. Shows each guardrail's decision before you publish."""
-    p.require(Permission.READ, body.tenant_id)
-    if not c.gateway_url:
-        raise HTTPException(status_code=503, detail="GATEWAY_URL is not configured for simulation")
-    if body.source == "current":
-        live = await c.ctx.store.current_snapshot(body.environment)
-        if live is None:
-            raise HTTPException(status_code=404, detail=f"nothing published in {body.environment} yet")
-        doc = SnapshotDoc.model_validate(live.document)
-    else:
-        working = [r.assignment for r in await c.ctx.store.list_assignments(body.environment)]
-        result = compile_snapshot(body.environment, working, await c.registry.versions_by_key(), force=True)
-        if result.document is None:
-            raise HTTPException(status_code=422, detail={"error": "working set is invalid", "errors": result.errors})
-        doc = result.document
-    catalog = await c.catalog.current_document()
-    resp = await c.http.post(
-        f"{c.gateway_url.rstrip('/')}/internal/simulate",
-        json={
-            "snapshot": doc.model_dump(mode="json"),
-            "catalog": catalog[0] if catalog else None,
-            "tenant_id": body.tenant_id,
-            "stage": body.stage.value,
-            "request": body.request.model_dump(mode="json"),
-        },
-        headers={"X-Internal-Token": c.internal_token},
+    return await c.simulation.run(
+        p,
+        environment=body.environment,
+        source=body.source,
+        tenant_id=body.tenant_id,
+        stage=body.stage,
+        request=body.request,
     )
-    if resp.status_code != 200:
-        raise HTTPException(status_code=502, detail=f"gateway simulation failed: HTTP {resp.status_code}")
-    return {"source": body.source, "snapshot": doc.version, "result": resp.json()}
 
 
 # ---- analytics (reads the gateway's audit schema through a read-only DSN) ---------------------------
@@ -161,32 +162,11 @@ async def simulate(body: SimulateIn, p: Principal = Depends(principal), c: Conta
 
 @router.get("/analytics/guardrails")
 async def analytics(
-    environment: str,
+    environment: Environment | None = None,
     tenant_id: str | None = None,
     hours: int = Query(24, ge=1, le=24 * 90),
     p: Principal = Depends(principal),
     c: Container = Depends(container),
 ):
-    if tenant_id is None and not p.is_platform:
-        tenant_id = p.tenant_id
-    p.require(Permission.READ, tenant_id if tenant_id is not None else p.tenant_id)
-    if c.audit_sessionmaker is None:
-        raise HTTPException(status_code=503, detail="AUDIT_DSN is not configured")
-    from sqlalchemy import text
-
-    sql = text(
-        """
-        SELECT r->>'guardrail_id' AS guardrail_id, r->>'version' AS version, e.stage, r->>'decision' AS decision,
-               r->>'mode' AS mode, count(*) AS n, avg((r->>'latency_ms')::float) AS avg_latency_ms,
-               sum(CASE WHEN r->>'error' IS NOT NULL THEN 1 ELSE 0 END) AS errors
-          FROM audit.audit_events e, jsonb_array_elements(e.guardrail_results) r
-         WHERE e.environment = :env
-           AND e.created_at > now() - make_interval(hours => :hours)
-           AND (CAST(:tenant AS text) IS NULL OR e.tenant_id = :tenant)
-         GROUP BY 1, 2, 3, 4, 5
-         ORDER BY 1, 3, 4
-        """
-    )
-    async with c.audit_sessionmaker() as s:  # type: ignore[operator]
-        rows = (await s.execute(sql, {"env": environment, "hours": hours, "tenant": tenant_id})).mappings().all()
-    return {"environment": environment, "tenant_id": tenant_id, "hours": hours, "rows": [dict(r) for r in rows]}
+    """Decisions per stage and per guardrail, latency and a time series, from the audit log."""
+    return await c.analytics.guardrails(p, environment=environment, tenant_id=tenant_id, hours=hours)

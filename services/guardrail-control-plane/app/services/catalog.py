@@ -105,6 +105,7 @@ class CatalogService:
         scopes: list[str] | None = None,
         environments: Sequence[str] | None = None,
         expires_at: datetime | None = None,
+        rate_limit_per_minute: int | None = None,
     ) -> tuple[ApiKeyRecord, str]:
         p.require(Permission.CATALOG_WRITE, tenant_id)
         await self._tenant(tenant_id)
@@ -117,6 +118,7 @@ class CatalogService:
             scopes=scopes or ["guard:invoke"],
             environments=list(environments) if environments is not None else None,  # type: ignore[arg-type]
             expires_at=expires_at,
+            rate_limit_per_minute=rate_limit_per_minute,
         )
         await self.store.add_api_key(key)
         await self.ctx.log("api_key", key.id, "create", p.actor, after={"tenant_id": tenant_id, "name": name})
@@ -145,6 +147,27 @@ class CatalogService:
         await self.ctx.log("api_key", key_id, "revoke", p.actor)
         await self.publish()
         return revoked
+
+    async def set_api_key_rate_limit(
+        self, p: Principal, tenant_id: str, key_id: str, rate_limit_per_minute: int | None
+    ) -> ApiKeyRecord:
+        """None = the gateway default; 0 = unlimited for this key."""
+        p.require(Permission.CATALOG_WRITE, tenant_id)
+        key = await self.store.get_api_key(key_id)
+        if key is None or key.tenant_id != tenant_id:
+            raise NotFound(f"api key {key_id} not found")
+        updated = key.model_copy(update={"rate_limit_per_minute": rate_limit_per_minute})
+        await self.store.put_api_key(updated)
+        await self.ctx.log(
+            "api_key",
+            key_id,
+            "rate_limit",
+            p.actor,
+            before={"rate_limit_per_minute": key.rate_limit_per_minute},
+            after={"rate_limit_per_minute": rate_limit_per_minute},
+        )
+        await self.publish()
+        return updated
 
     # ---- agents / actions / modifiers ----------------------------------------------------
 

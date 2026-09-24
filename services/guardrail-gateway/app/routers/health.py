@@ -11,7 +11,7 @@ from guardrail_sdk import SDK_VERSION
 
 router = APIRouter(tags=["ops"])
 
-SERVICE_VERSION = "0.2.0"
+SERVICE_VERSION = "0.5.0"
 
 
 @router.get("/health")

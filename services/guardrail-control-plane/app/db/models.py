@@ -54,6 +54,7 @@ class ApiKey(Base):
     expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    rate_limit_per_minute: Mapped[int | None] = mapped_column(Integer)
 
 
 class Agent(Base):

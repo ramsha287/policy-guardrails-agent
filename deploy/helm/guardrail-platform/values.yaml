@@ -1,0 +1,235 @@
+# Default values. Layer values-k3s.yaml or values-cloud.yaml on top; they are the only
+# differences between environments (plan section 9).
+
+global:
+  # Environment this release's gateway serves (GATEWAY_ENV): dev | staging | production.
+  environment: production
+  # Images are <imageRegistry>/<component image>:<imageTag>. The release workflow pushes them to GHCR.
+  imageRegistry: ghcr.io/ramsha287/policy-guardrails-agent
+  imageTag: ""                      # "" = the chart's appVersion
+  imagePullPolicy: IfNotPresent
+  imagePullSecrets: []
+  logLevel: INFO
+
+# ---- secrets -------------------------------------------------------------------------------------
+# Every secret value comes from ONE Kubernetes Secret with these keys:
+#   INTERNAL_TOKEN            shared by gateways and the control plane (>= 16 chars)
+#   REVIEW_ENCRYPTION_KEY     Fernet key for held review payloads
+#   AI_GATEWAY_API_KEY        `service` key for the redaction service (python -m app.cli ai-gateway-credentials)
+#   AI_GATEWAY_PROJECT_ID     redaction project id (same command)
+#   HASH_SECRET               HMAC secret for `hash` redaction
+#   POSTGRES_PASSWORD         in-chart Postgres only
+#   GATEWAY_POSTGRES_DSN, CONTROL_PLANE_POSTGRES_DSN, AI_GATEWAY_POSTGRES_DSN, AUDIT_DSN
+#                             external Postgres only (postgresql.enabled=false)
+#   REDIS_URL                 external Redis only (redis.enabled=false), optional
+#   PROXY_UPSTREAM_API_KEY    LLM provider key, proxy mode only
+# Production: keep them in a SOPS-encrypted file (deploy/secrets) and set existingSecret.
+secrets:
+  existingSecret: ""
+  # Dev/k3s trials only: let the chart create the Secret from `values` (they end up in the Helm
+  # release history, which is why production uses existingSecret).
+  create: false
+  values: {}
+
+# ---- data stores --------------------------------------------------------------------------------
+postgresql:
+  # In-chart single-instance Postgres (k3s, small installs). For HA, disable it and point the DSN
+  # keys at a managed database or a CloudNativePG cluster.
+  enabled: true
+  image: postgres:16-alpine
+  database: guardrails
+  username: guardrails
+  port: 5432
+  storage:
+    size: 20Gi
+    storageClassName: ""            # "" = cluster default (local-path on k3s)
+  resources:
+    requests: {cpu: 100m, memory: 256Mi}
+    limits: {memory: 1Gi}
+
+redis:
+  # Pub/sub for instant snapshot/catalog updates and plugin state. Everything still works
+  # without it (gateways poll), just with up to CP_POLL_SECONDS of delay.
+  enabled: true
+  image: redis:7-alpine
+  resources:
+    requests: {cpu: 50m, memory: 64Mi}
+    limits: {memory: 256Mi}
+
+# ---- gateway ------------------------------------------------------------------------------------
+gateway:
+  enabled: true
+  image: guardrail-gateway
+  replicas: 2
+  port: 8100
+  internalPort: 8101                # used when mtls.mode=app
+  # control_plane (recommended): snapshot + catalog come from the control plane.
+  # file: the snapshot below is mounted and the gateway uses its own tables.
+  configSource: control_plane
+  controlPlaneUrl: ""               # "" = this release's control plane
+  snapshot: {}                      # configSource=file: the SnapshotDoc JSON for global.environment
+  # Requests per minute per API key across ALL replicas (0 = unlimited); the chart divides it by
+  # `replicas`. A key's own limit in the control-plane catalog overrides it.
+  rateLimitPerMinute: 0
+  maxBodyBytes: 1048576
+  defaultGuardrailTimeoutMs: 800
+  audit:
+    retentionMonths: 12
+    spoolSizeLimit: 1Gi             # disk spool for audit events while Postgres is unavailable
+  proxy:
+    enabled: false                  # OpenAI-compatible /v1/chat/completions (secret PROXY_UPSTREAM_API_KEY)
+    upstreamUrl: https://api.openai.com/v1
+    defaultAgentId: proxy
+    models: []                      # [] = any model
+  otelEndpoint: ""                  # OTEL_EXPORTER_OTLP_ENDPOINT
+  extraEnv: []
+  resources:
+    requests: {cpu: 200m, memory: 256Mi}
+    limits: {memory: 768Mi}
+  autoscaling:
+    enabled: false
+    minReplicas: 2
+    maxReplicas: 6
+    targetCPUUtilizationPercentage: 70
+  pdb:
+    enabled: true
+    minAvailable: 1
+  ingress:
+    enabled: false                  # agents call the gateway; usually cluster-internal only
+    className: ""
+    host: guardrail-gateway.local
+    tlsSecretName: ""
+    annotations: {}
+
+opa:
+  image: openpolicyagent/opa:1.4.2
+  resources:
+    requests: {cpu: 50m, memory: 64Mi}
+    limits: {memory: 256Mi}
+
+# ---- control plane + console --------------------------------------------------------------------
+controlPlane:
+  enabled: true
+  image: guardrail-control-plane
+  replicas: 2
+  port: 8200
+  internalPort: 8201
+  twoPersonEnvironments: [production]
+  reviewTtlMinutes: 15
+  publishRequestTtlHours: 24
+  gatewayStaleSeconds: 300
+  # Gateway per environment for /simulate, e.g. {staging: "http://guardrails-staging-gateway:8100"}.
+  # This release's gateway is added for global.environment and is the fallback.
+  gatewayUrls: {}
+  analytics: true                   # reads the audit log through AUDIT_DSN
+  extraEnv: []
+  resources:
+    requests: {cpu: 100m, memory: 192Mi}
+    limits: {memory: 512Mi}
+  pdb:
+    enabled: true
+    minAvailable: 1
+  ingress:
+    enabled: true                   # the console (/console) and admin API (/cp/v1)
+    className: ""
+    host: guardrails.local
+    tlsSecretName: ""
+    annotations: {}
+
+# ---- AI Security Gateway (PII redaction) --------------------------------------------------------
+aiGateway:
+  enabled: true
+  projectService:
+    image: ai-gateway-project-service
+    replicas: 1                     # runs its own migrations at start: keep a single replica
+    port: 8000
+    resources:
+      requests: {cpu: 50m, memory: 128Mi}
+      limits: {memory: 384Mi}
+  redaction:
+    image: ai-gateway-instant-redaction
+    replicas: 2
+    port: 8001
+    analyzerWorkers: 4
+    rateLimitClientPerMinute: 600
+    rateLimitServicePerMinute: 0
+    projectCacheTtlSeconds: 60
+    resources:                      # spaCy en_core_web_lg + Presidio
+      requests: {cpu: 500m, memory: 1536Mi}
+      limits: {memory: 2560Mi}
+    autoscaling:
+      enabled: false
+      minReplicas: 2
+      maxReplicas: 6
+      targetCPUUtilizationPercentage: 70
+
+# ---- audit retention ----------------------------------------------------------------------------
+auditRetention:
+  # Creates next months' audit partitions and drops those past gateway.audit.retentionMonths.
+  enabled: true
+  schedule: "17 3 * * *"
+
+# ---- mutual TLS between services ----------------------------------------------------------------
+mtls:
+  # none:    plain HTTP inside the namespace (NetworkPolicies still restrict who talks to whom)
+  # linkerd: inject the Linkerd proxy; mTLS for all pod-to-pod traffic, no app changes (recommended)
+  # app:     the services terminate mTLS themselves on their internal ports, using certificates
+  #          from cert-manager (certManager.enabled) or Secrets you provide
+  mode: none
+  app:
+    certManager:
+      enabled: false
+      issuerRef: {name: guardrail-ca, kind: Issuer}
+      duration: 2160h
+      renewBefore: 360h
+    # Without cert-manager: Secret per component, each with ca.crt, tls.crt and tls.key.
+    secretNames:
+      gateway: ""
+      controlPlane: ""
+
+# ---- network policies ---------------------------------------------------------------------------
+networkPolicy:
+  enabled: true
+  # Where the ingress controller runs (Traefik on k3s lives in kube-system).
+  ingressControllerNamespace: kube-system
+  # Namespaces allowed to call the gateway's agent API (in addition to the ingress controller).
+  agentNamespaces: []
+  # Namespaces running other environments' gateways (e.g. a staging release) that sync from
+  # this release's control plane.
+  remoteGatewayNamespaces: []
+  # Gateway-only release (controlPlane.enabled=false): namespace of the control plane it syncs from.
+  controlPlaneNamespace: ""
+  # Namespace of Prometheus, allowed to scrape /metrics. "" = no scrape access.
+  prometheusNamespace: monitoring
+  # Egress for proxy mode (the LLM provider) and remote guardrails. [] = no egress outside the cluster.
+  externalEgressCIDRs: []
+
+# ---- monitoring ---------------------------------------------------------------------------------
+monitoring:
+  podAnnotations: true              # prometheus.io/scrape annotations for annotation-based scraping
+  serviceMonitor:
+    enabled: false                  # needs the Prometheus Operator CRDs
+    interval: 30s
+    labels: {}
+  prometheusRule:
+    enabled: false                  # needs the Prometheus Operator CRDs
+    labels: {}
+  grafanaDashboard:
+    enabled: false                  # ConfigMap picked up by the Grafana sidecar
+    labels: {grafana_dashboard: "1"}
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 10001
+  runAsGroup: 10001
+  fsGroup: 10001
+  seccompProfile: {type: RuntimeDefault}
+
+containerSecurityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities: {drop: [ALL]}
+
+nodeSelector: {}
+tolerations: []
+affinity: {}

@@ -126,7 +126,7 @@ services:
         alembic upgrade head &&
         python -m app.cli bootstrap-dev --snapshot /app/gateway-snapshots/dev.json
         --plugin-dir /app/gateway-plugins --write /bootstrap/cp.env &&
-        exec uvicorn --factory app.main:create_app --host 0.0.0.0 --port 8200
+        exec python -m app.serve
     environment:
       <<: [*db-env, *internal-token]
       REDIS_URL: redis://redis:6379/0

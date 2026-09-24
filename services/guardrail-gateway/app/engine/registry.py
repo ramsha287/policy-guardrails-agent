@@ -13,6 +13,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from app.engine.snapshot import Assignment, SnapshotDoc, load_snapshot
+from app.observability import SNAPSHOT_LOADED
 from guardrail_sdk import Guardrail, Manifest, PluginContext, Stage
 from guardrail_sdk.loader import discover_manifests, resolve_class
 
@@ -133,6 +134,7 @@ class SnapshotHolder:
             logger.error("Snapshot rejected, keeping %s: %s", self.version, self.last_error)
             return False
         old, self.current, self.last_error = self.current, new, None
+        SNAPSHOT_LOADED.set(1)
         logger.info("Snapshot %s loaded with %d assignment(s)", new.version, len(new.bound))
         if old is not None:
             # Let in-flight requests on the old snapshot finish before closing its clients.

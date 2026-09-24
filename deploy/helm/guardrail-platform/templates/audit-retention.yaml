@@ -1,0 +1,49 @@
+{{- if and .Values.gateway.enabled .Values.auditRetention.enabled }}
+{{- $c := dict "root" $ "component" "audit-retention" -}}
+# Creates the next months' audit partitions and drops those older than the retention period
+# (gateway.audit.retentionMonths). Replaces the in-process maintenance (AUDIT_MAINTENANCE=false).
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ include "gp.name" $c }}
+  labels: {{- include "gp.labels" $c | nindent 4 }}
+spec:
+  schedule: {{ .Values.auditRetention.schedule | quote }}
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 3
+      activeDeadlineSeconds: 900
+      template:
+        metadata:
+          labels: {{- include "gp.labels" $c | nindent 12 }}
+          {{- if eq .Values.mtls.mode "linkerd" }}
+          annotations:
+            linkerd.io/inject: enabled
+            config.alpha.linkerd.io/proxy-enable-native-sidecar: "true"
+          {{- end }}
+        spec:
+          restartPolicy: OnFailure
+          automountServiceAccountToken: false
+          securityContext: {{- toYaml .Values.podSecurityContext | nindent 12 }}
+          {{- include "gp.scheduling" $ | nindent 10 }}
+          containers:
+            - name: partitions
+              image: {{ include "gp.image" (dict "root" $ "image" .Values.gateway.image) }}
+              imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+              command: ["python", "-m", "app.cli", "partitions"]
+              env:
+                {{- include "gp.dsnEnv" (dict "root" $ "key" "GATEWAY_POSTGRES_DSN") | nindent 16 }}
+                - {name: AUDIT_RETENTION_MONTHS, value: {{ .Values.gateway.audit.retentionMonths | quote }}}
+              resources:
+                requests: {cpu: 50m, memory: 128Mi}
+                limits: {memory: 256Mi}
+              securityContext: {{- toYaml .Values.containerSecurityContext | nindent 16 }}
+              volumeMounts:
+                - {name: tmp, mountPath: /tmp}
+          volumes:
+            - name: tmp
+              emptyDir: {sizeLimit: 32Mi}
+{{- end }}

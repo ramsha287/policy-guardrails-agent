@@ -234,6 +234,20 @@ class MemoryStore:
     async def put_review(self, review):
         self.reviews[review.id] = _copy(review)
 
+    async def decide_review(self, review_id, *, status, reviewer, decided_at, decision_note):
+        r = self.reviews.get(review_id)
+        if r is None or r.status != "pending" or r.expires_at <= decided_at:
+            return False
+        self.reviews[review_id] = r.model_copy(
+            update={"status": status, "reviewer": reviewer, "decided_at": decided_at, "decision_note": decision_note}
+        )
+        return True
+
+    async def add_review_raw_viewer(self, review_id, actor):
+        r = self.reviews.get(review_id)
+        if r is not None:
+            self.reviews[review_id] = r.model_copy(update={"raw_viewed_by": [*r.raw_viewed_by, actor]})
+
     async def list_reviews(self, tenant_id=None, status=None, limit=100):
         items = [
             r

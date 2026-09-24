@@ -1,0 +1,57 @@
+# Managed Kubernetes: managed Postgres and Redis, mesh mTLS, autoscaling, Prometheus Operator.
+# All connection strings and keys come from the SOPS-managed Secret (secrets.existingSecret).
+global:
+  environment: production
+
+secrets:
+  existingSecret: guardrail-secrets
+
+postgresql:
+  enabled: false              # GATEWAY_POSTGRES_DSN, CONTROL_PLANE_POSTGRES_DSN, AI_GATEWAY_POSTGRES_DSN, AUDIT_DSN
+redis:
+  enabled: false              # REDIS_URL (e.g. rediss://... for TLS)
+
+gateway:
+  replicas: 3
+  autoscaling:
+    enabled: true
+    minReplicas: 3
+    maxReplicas: 10
+  pdb:
+    minAvailable: 2
+
+controlPlane:
+  replicas: 2
+  ingress:
+    enabled: true
+    className: ""             # the cluster's default IngressClass
+    host: guardrails.example.com
+    tlsSecretName: guardrails-tls
+
+aiGateway:
+  redaction:
+    replicas: 3
+    autoscaling:
+      enabled: true
+      minReplicas: 3
+      maxReplicas: 8
+
+mtls:
+  mode: linkerd
+
+networkPolicy:
+  enabled: true
+  ingressControllerNamespace: ingress-nginx
+  prometheusNamespace: monitoring
+  # Managed Postgres/Redis (and the LLM provider for proxy mode) live outside the cluster.
+  externalEgressCIDRs:
+    - 10.0.0.0/8
+
+monitoring:
+  podAnnotations: false
+  serviceMonitor:
+    enabled: true
+  prometheusRule:
+    enabled: true
+  grafanaDashboard:
+    enabled: true

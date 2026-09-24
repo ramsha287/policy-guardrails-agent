@@ -8,6 +8,8 @@ from fastapi.responses import JSONResponse
 
 from ..domain.rbac import Forbidden
 from ..errors import NotFound, StateConflict, ValidationFailed
+from ..services.analytics import AnalyticsUnavailable
+from ..services.simulation import SimulationUnavailable
 from ..store.base import Conflict
 
 logger = logging.getLogger(__name__)
@@ -32,6 +34,14 @@ def register(app: FastAPI) -> None:
     @app.exception_handler(Conflict)
     async def _conflict(_: Request, exc: Exception) -> JSONResponse:
         return JSONResponse(status_code=409, content={"error": str(exc)})
+
+    @app.exception_handler(SimulationUnavailable)
+    async def _simulation(_: Request, exc: SimulationUnavailable) -> JSONResponse:
+        return JSONResponse(status_code=exc.status, content={"error": str(exc)})
+
+    @app.exception_handler(AnalyticsUnavailable)
+    async def _analytics(_: Request, exc: AnalyticsUnavailable) -> JSONResponse:
+        return JSONResponse(status_code=503, content={"error": str(exc)})
 
     @app.exception_handler(HTTPException)
     async def _http(_: Request, exc: HTTPException) -> JSONResponse:

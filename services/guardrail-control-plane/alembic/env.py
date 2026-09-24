@@ -24,6 +24,10 @@ VERSION_TABLE_SCHEMA = "control"
 
 
 def do_run_migrations(connection: Connection) -> None:
+    # Replicas (or init containers) may start together: a session-level advisory lock makes
+    # concurrent `alembic upgrade head` runs wait for each other instead of racing. It is
+    # released when this connection closes.
+    connection.execute(text("SELECT pg_advisory_lock(hashtext(:k))"), {"k": f"alembic:{VERSION_TABLE_SCHEMA}"})
     connection.execute(text(f"CREATE SCHEMA IF NOT EXISTS {VERSION_TABLE_SCHEMA}"))
     context.configure(
         connection=connection,

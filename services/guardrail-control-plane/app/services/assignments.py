@@ -102,6 +102,13 @@ class AssignmentService:
             before=current.assignment.model_dump(mode="json"),
         )
 
+    @staticmethod
+    def _visible(p: Principal, assignment: dict[str, Any] | None) -> dict[str, Any] | None:
+        """A tenant key only sees the side of a change that belongs to its tenant."""
+        if assignment is None or p.is_platform or _tenant_of(assignment) == p.tenant_id:
+            return assignment
+        return None
+
     async def diff(self, p: Principal, environment: str) -> dict[str, Any]:
         """What publishing now would change compared with the live snapshot."""
         _check_env(environment)
@@ -114,10 +121,28 @@ class AssignmentService:
         live: dict[str, Any] = {}
         if current is not None:
             live = {a.id: a.model_dump(mode="json") for a in SnapshotDoc.model_validate(current.document).assignments}
+        added = sorted(set(working) - set(live))
+        removed = sorted(set(live) - set(working))
+        changed = sorted(k for k in set(working) & set(live) if working[k] != live[k])
+        if not p.is_platform:  # tenant keys only see their own tenant's assignments
+            mine = {k for k, a in {**live, **working}.items() if _tenant_of(a) == p.tenant_id}
+            added, removed, changed = ([k for k in ids if k in mine] for ids in (added, removed, changed))
         return {
             "base_version": current.version if current else None,
-            "added": sorted(set(working) - set(live)),
-            "removed": sorted(set(live) - set(working)),
-            "changed": sorted(k for k in set(working) & set(live) if working[k] != live[k]),
+            "added": added,
+            "removed": removed,
+            "changed": changed,
+            # before/after for each difference, so a reviewer sees exactly what will change
+            "details": {
+                k: {"live": self._visible(p, live.get(k)), "working": self._visible(p, working.get(k))}
+                for k in (*added, *removed, *changed)
+            },
             "at": utcnow().isoformat(),
         }
+
+
+def _tenant_of(assignment: dict[str, Any]) -> str | None:
+    scope_id = assignment.get("scope_id")
+    if assignment.get("scope_type") == "global" or not scope_id:
+        return None
+    return str(scope_id).split("/", 1)[0]

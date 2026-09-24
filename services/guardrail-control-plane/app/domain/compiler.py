@@ -133,6 +133,7 @@ def build_catalog(
                     scopes=k.scopes,
                     environments=k.environments,
                     expires_at=k.expires_at,
+                    rate_limit_per_minute=k.rate_limit_per_minute,
                 )
             )
     for a in sorted(agents, key=lambda a: (a.tenant_id, a.agent_id)):

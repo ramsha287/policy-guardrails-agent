@@ -319,3 +319,45 @@ async def test_internal_simulate():
     assert out["simulated"] is True and out["decision"] == "allow" and out["results"][0]["guardrail_id"] == "noop"
     assert r_bad.status_code == 422
     assert svc.audit.events == []  # simulations are never audited
+
+
+async def test_rate_limit_is_429_with_retry_after():
+    from app.gateway.ratelimit import RateLimiter
+
+    client, svc = make_client()
+    svc.limiter = RateLimiter(2)
+    async with client:
+        codes = [
+            (await client.post("/v1/guard/input", json=BODY, headers={"X-API-Key": KEY})).status_code for _ in range(3)
+        ]
+        r = await client.post("/v1/guard/input", json=BODY, headers={"X-API-Key": KEY})
+    assert codes == [200, 200, 429] and r.status_code == 429 and int(r.headers["retry-after"]) >= 1
+    assert len(svc.audit.events) == 2  # refused requests are not evaluated or audited
+
+
+async def test_proxy_route_auth_and_disabled_state():
+    from app.gateway.proxy import ChatProxy, ProxyConfig
+    from tests.helpers import result
+
+    client, svc = make_client(snap=snapshot(bind("allow-all", result("allow"), stages=("input", "output"))))
+    body = {"model": "m", "messages": [{"role": "user", "content": "email jane@example.com"}]}
+    async with client:
+        off = await client.post("/v1/chat/completions", json=body, headers={"Authorization": f"Bearer {KEY}"})
+        upstream = httpx.AsyncClient(
+            transport=httpx.MockTransport(
+                lambda r: httpx.Response(200, json={"choices": [{"message": {"role": "assistant", "content": "done"}}]})
+            )
+        )
+        svc.proxy = ChatProxy(svc, ProxyConfig(upstream_url="https://llm.example/v1"), upstream)
+        bad = await client.post("/v1/chat/completions", json=body, headers={"Authorization": "Bearer nope"})
+        ok = await client.post(
+            "/v1/chat/completions",
+            json=body,
+            headers={"Authorization": f"Bearer {KEY}", "X-Agent-Id": "research-agent"},
+        )
+    assert off.status_code == 404 and off.json()["error"]["type"] == "not_found"
+    assert bad.status_code == 401 and bad.json()["error"]["type"] == "invalid_api_key"
+    assert ok.status_code == 200, ok.text
+    assert ok.json()["choices"][0]["message"]["content"] == "done"
+    assert ok.headers["x-guardrail-input-decision"] == "allow"
+    assert ok.headers["x-guardrail-output-decision"] == "allow"

@@ -3,6 +3,7 @@
     python -m app.cli create-admin-key --name root --roles admin [--tenant acme] [--write file]
     python -m app.cli import-gateway --snapshot /snapshots/dev.json [--snapshot ...]
     python -m app.cli bootstrap-dev --snapshot /snapshots/dev.json --write /bootstrap/cp.env
+    python -m app.cli dev-certs --out /certs --names guardrail-control-plane,guardrail-gateway
 
 `import-gateway` migrates an existing phase 1-3 deployment: it copies tenants, gateway API key
 *hashes* (existing agent keys keep working), agents, actions and modifiers from the gateway's
@@ -173,6 +174,12 @@ async def _main(args: argparse.Namespace) -> int:
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(prog="python -m app.cli")
     sub = p.add_subparsers(dest="command", required=True)
+    d = sub.add_parser("dev-certs", help="private CA + per-service certificates for mTLS in development")
+    d.add_argument("--out", required=True)
+    d.add_argument("--names", required=True, help="comma-separated service (DNS) names")
+    d.add_argument("--days", type=int, default=30)
+    d.add_argument("--owner-uid", type=int, default=None, help="chown the files (when run as root)")
+    d.add_argument("--force", action="store_true")
     k = sub.add_parser("create-admin-key")
     k.add_argument("--name", required=True)
     k.add_argument("--roles", default="admin", help="comma-separated: admin, editor, reviewer, reviewer-raw, viewer")
@@ -185,7 +192,15 @@ def main(argv: list[str] | None = None) -> int:
         c.add_argument("--plugin-dir", action="append", default=[], help="gateway plugin dir with guardrail*.yaml")
         if name == "bootstrap-dev":
             c.add_argument("--write", required=True, help="env file for the generated dev admin keys")
-    return asyncio.run(_main(p.parse_args(argv)))
+    args = p.parse_args(argv)
+    if args.command == "dev-certs":  # no database needed
+        from guardrail_sdk.devcerts import generate
+
+        names = [n.strip() for n in args.names.split(",") if n.strip()]
+        written = generate(Path(args.out), names, days=args.days, force=args.force, owner_uid=args.owner_uid)
+        print(f"wrote {len(written)} certificate(s) to {args.out}" if written else "certificates already present")
+        return 0
+    return asyncio.run(_main(args))
 
 
 if __name__ == "__main__":

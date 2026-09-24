@@ -25,6 +25,7 @@ from ..domain.rbac import Permission, Principal
 from ..domain.records import AssignmentRecord, PublishRequestRecord, SnapshotRecord, utcnow
 from ..errors import NotFound, StateConflict, ValidationFailed
 from ..events import SNAPSHOT_CHANNEL
+from ..metrics import SNAPSHOTS_PUBLISHED
 from .context import Ctx
 from .registry import RegistryService
 
@@ -251,6 +252,7 @@ class PublishService:
 
     async def _announce(self, record: SnapshotRecord) -> None:
         """Notify gateways after the commit so they never fetch before the row is visible."""
+        SNAPSHOTS_PUBLISHED.labels(record.environment, record.kind).inc()
         await self.ctx.events.publish(SNAPSHOT_CHANNEL, {"environment": record.environment, "version": record.version})
 
     async def import_snapshot(self, p: Principal, doc: SnapshotDoc, *, force: bool = True) -> SnapshotRecord:

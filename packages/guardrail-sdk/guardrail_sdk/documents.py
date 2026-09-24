@@ -93,6 +93,7 @@ class CatalogApiKey(BaseModel):
     scopes: list[str] = Field(default_factory=lambda: ["guard:invoke"])
     environments: list[Environment] | None = None  # None = every environment
     expires_at: datetime | None = None
+    rate_limit_per_minute: int | None = Field(default=None, ge=0)  # None = gateway default, 0 = unlimited
 
 
 class CatalogAgent(BaseModel):

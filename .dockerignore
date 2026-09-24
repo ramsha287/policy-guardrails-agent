@@ -7,3 +7,5 @@
 **/*.env
 services/*/tests
 packages/*/tests
+**/node_modules
+apps/console/dist

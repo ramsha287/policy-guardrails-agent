@@ -44,6 +44,7 @@ class ApiKeyRecord(Record):
     expires_at: datetime | None = None
     created_at: datetime = Field(default_factory=utcnow)
     revoked_at: datetime | None = None
+    rate_limit_per_minute: int | None = Field(default=None, ge=0)  # None = gateway default, 0 = unlimited
 
 
 class AgentRecord(Record):

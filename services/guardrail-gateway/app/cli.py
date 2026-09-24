@@ -84,16 +84,33 @@ DEV_PROJECT = {
 }
 
 
-async def _ai_gateway_project(http: httpx.AsyncClient, base: str) -> str:
-    resp = await http.post(f"{base}/ai-gateway/project/api/", json=DEV_PROJECT)
+async def _ai_gateway_project(http: httpx.AsyncClient, base: str, project: dict[str, Any] | None = None) -> str:
+    project = project or DEV_PROJECT
+    resp = await http.post(f"{base}/ai-gateway/project/api/", json=project)
     if resp.status_code == 201:
         return str(resp.json()["project_id"])
     listing = await http.get(f"{base}/ai-gateway/project/api/")
     listing.raise_for_status()
     for p in listing.json():
-        if p["project_name"] == DEV_PROJECT["project_name"]:
+        if p["project_name"] == project["project_name"]:
             return str(p["id"])
-    raise RuntimeError(f"could not create or find the ai-gateway dev project: HTTP {resp.status_code}")
+    raise RuntimeError(f"could not create or find the ai-gateway project: HTTP {resp.status_code}")
+
+
+async def ai_gateway_credentials(project_service_url: str, project_name: str) -> dict[str, str]:
+    """Create (or find) the redaction project and a `service` API key for the guardrail engine.
+
+    For installs without the dev bootstrap (Kubernetes): put the printed values in the secrets
+    file (AI_GATEWAY_PROJECT_ID, AI_GATEWAY_API_KEY). The key is shown once.
+    """
+    base = project_service_url.rstrip("/")
+    async with httpx.AsyncClient(timeout=10) as http:
+        project_id = await _ai_gateway_project(http, base, {**DEV_PROJECT, "project_name": project_name})
+        key_resp = await http.post(
+            f"{base}/ai-gateway/apikeys/api/", json={"name": f"guardrail-engine-{project_name}", "scope": "service"}
+        )
+        key_resp.raise_for_status()
+    return {"AI_GATEWAY_PROJECT_ID": project_id, "AI_GATEWAY_API_KEY": key_resp.json()["key"]}
 
 
 async def bootstrap_dev(sm: async_sessionmaker[AsyncSession], out: Path, project_service_url: str) -> None:
@@ -207,6 +224,9 @@ def build_parser() -> argparse.ArgumentParser:
     m.add_argument("--value", required=True)
     m.add_argument("--delta", type=int, required=True)
     sub.add_parser("partitions")
+    cred = sub.add_parser("ai-gateway-credentials", help="create the redaction project + service key; print them")
+    cred.add_argument("--project-service-url", default="http://project-service:8000")
+    cred.add_argument("--project-name", default="guardrail-pii")
     b = sub.add_parser("bootstrap-dev")
     b.add_argument("--write", required=True)
     b.add_argument(
@@ -217,6 +237,10 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args: Any = build_parser().parse_args(argv)
+    if args.command == "ai-gateway-credentials":  # talks to project-service only; no database
+        creds = asyncio.run(ai_gateway_credentials(args.project_service_url, args.project_name))
+        print("\n".join(f"{k}={v}" for k, v in creds.items()))
+        return 0
     return asyncio.run(_main(args))
 
 

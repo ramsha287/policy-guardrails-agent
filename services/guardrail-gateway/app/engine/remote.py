@@ -18,6 +18,7 @@ import logging
 import os
 import socket
 import tempfile
+import time
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -28,6 +29,7 @@ from app.context.catalog import ActionRule, AgentInfo, TenantCatalog
 from app.engine.registry import PluginRegistry, SnapshotHolder
 from app.engine.snapshot import parse_snapshot
 from app.gateway.auth import Principal
+from app.observability import CONFIG_LAST_SYNC, CONTROL_PLANE_REACHABLE
 from guardrail_sdk.documents import CatalogDoc
 
 logger = logging.getLogger(__name__)
@@ -83,7 +85,7 @@ class CatalogHolder:
                     continue
                 if k.environments is not None and self._env not in k.environments:
                     continue
-                keys[k.key_hash] = Principal(k.id, t.id, k.name, frozenset(k.scopes))
+                keys[k.key_hash] = Principal(k.id, t.id, k.name, frozenset(k.scopes), k.rate_limit_per_minute)
         self.doc, self._keys, self._tenants, self.last_error = doc, keys, tenants, None
         logger.info("Catalog %s loaded: %d tenant(s), %d key(s)", doc.version, len(tenants), len(keys))
         return True
@@ -206,9 +208,12 @@ class ControlPlaneSync:
         except httpx.HTTPError as exc:
             self.last_sync_error = f"control plane unreachable ({exc.__class__.__name__})"
             self.control_plane_reachable = False
+            CONTROL_PLANE_REACHABLE.set(0)
             return False
         self.control_plane_reachable = True
         self.last_sync_error = None
+        CONTROL_PLANE_REACHABLE.set(1)
+        CONFIG_LAST_SYNC.set(time.time())
         if status == 200 and doc is not None and await self._apply(kind, doc):
             self._etags[kind] = etag
             self.cache.write(kind, doc, etag)

@@ -1,0 +1,29 @@
+{{- if and (eq .Values.mtls.mode "app") .Values.mtls.app.certManager.enabled }}
+{{- $cm := .Values.mtls.app.certManager -}}
+{{- range $name, $key := dict "gateway" "gateway" "control-plane" "controlPlane" }}
+{{- $c := dict "root" $ "component" $name }}
+---
+# One certificate per service, used as server certificate on its internal port and as client
+# certificate when it calls the other service (both EKUs).
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ include "gp.name" $c }}
+  labels: {{- include "gp.labels" $c | nindent 4 }}
+spec:
+  secretName: {{ include "gp.mtlsSecret" (dict "root" $ "component" $name "key" $key) }}
+  duration: {{ $cm.duration }}
+  renewBefore: {{ $cm.renewBefore }}
+  privateKey: {algorithm: ECDSA, size: 256, rotationPolicy: Always}
+  usages: [server auth, client auth, digital signature, key encipherment]
+  commonName: {{ include "gp.name" $c }}
+  dnsNames:
+    - {{ include "gp.name" $c }}
+    - {{ printf "%s.%s.svc" (include "gp.name" $c) $.Release.Namespace }}
+    - {{ printf "%s.%s.svc.cluster.local" (include "gp.name" $c) $.Release.Namespace }}
+  issuerRef:
+    name: {{ $cm.issuerRef.name }}
+    kind: {{ $cm.issuerRef.kind }}
+    group: cert-manager.io
+{{- end }}
+{{- end }}

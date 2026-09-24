@@ -13,6 +13,8 @@ from app.engine.pipeline import GuardrailEngine
 from app.engine.registry import CompiledSnapshot, PluginRegistry
 from app.engine.remote import ControlPlaneClient
 from app.gateway.auth import Authenticator
+from app.gateway.proxy import ChatProxy
+from app.gateway.ratelimit import RateLimiter
 from app.policy.opa import PolicyEngine
 
 
@@ -39,3 +41,7 @@ class Services:
     registry: PluginRegistry | None = None
     # CONFIG_SOURCE=control_plane only: review queue + internal token for /internal/*
     control_plane: ControlPlaneClient | None = None
+    # Per-API-key rate limits (None = off)
+    limiter: RateLimiter | None = None
+    # PROXY_ENABLED: OpenAI-compatible chat completions with guardrails applied
+    proxy: ChatProxy | None = None
