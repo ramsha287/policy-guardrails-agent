@@ -1,0 +1,36 @@
+Guardrail platform {{ .Chart.AppVersion }} installed as "{{ .Release.Name }}" (gateway environment: {{ .Values.global.environment }}).
+
+{{- if .Values.controlPlane.enabled }}
+
+1. Create the first admin key (shown once):
+     kubectl -n {{ .Release.Namespace }} exec deploy/{{ include "gp.name" (dict "root" $ "component" "control-plane") }} -c control-plane -- \
+       python -m app.cli create-admin-key --name <you> --roles admin
+   Create a second admin for production approvals (two-person rule), and reviewer keys as needed.
+
+2. Open the console:
+{{- if .Values.controlPlane.ingress.enabled }}
+     http{{ if .Values.controlPlane.ingress.tlsSecretName }}s{{ end }}://{{ .Values.controlPlane.ingress.host }}/console/
+{{- else }}
+     kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "gp.name" (dict "root" $ "component" "control-plane") }} 8200:{{ .Values.controlPlane.port }}
+     then http://localhost:8200/console/
+{{- end }}
+{{- end }}
+{{- if .Values.gateway.enabled }}
+
+3. Agents call the gateway at:
+     http://{{ include "gp.name" (dict "root" $ "component" "gateway") }}.{{ .Release.Namespace }}.svc:{{ .Values.gateway.port }}/v1/guard/<stage>
+   with a gateway API key created in the console (Tenants & keys).
+{{- if .Values.gateway.proxy.enabled }}
+   Proxy mode: point an OpenAI client at .../v1 with the gateway key as the API key.
+{{- end }}
+{{- end }}
+{{- if .Values.secrets.create }}
+
+WARNING: secrets.create=true stores secret values in the Helm release. Use a SOPS-encrypted Secret
+and secrets.existingSecret outside of trials (see deploy/secrets/README.md).
+{{- end }}
+{{- if eq .Values.mtls.mode "none" }}
+
+NOTE: mtls.mode=none. Traffic between services is plain HTTP inside the namespace. Use
+mtls.mode=linkerd (recommended) or mtls.mode=app in production.
+{{- end }}

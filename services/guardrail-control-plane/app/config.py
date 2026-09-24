@@ -13,7 +13,8 @@ class Settings(BaseSettings):
     log_level: str = Field("INFO", alias="LOG_LEVEL")
     redis_url: str | None = Field(None, alias="REDIS_URL")
 
-    # Shared secret for gateway -> control plane calls (/cp/v1/internal/*). mTLS in phase 5.
+    # Shared secret for gateway -> control plane calls (/cp/v1/internal/*); add mTLS with
+    # INTERNAL_PORT + TLS_* (guardrail_sdk.serving) or a mesh.
     internal_token: str | None = Field(None, alias="INTERNAL_TOKEN")  # required by the API (checked at start)
     # Fernet key for payloads held in the review queue.
     review_encryption_key: str | None = Field(None, alias="REVIEW_ENCRYPTION_KEY")
@@ -24,12 +25,17 @@ class Settings(BaseSettings):
     review_ttl_minutes: int = Field(15, alias="REVIEW_TTL_MINUTES")
     gateway_stale_seconds: int = Field(300, alias="GATEWAY_STALE_SECONDS")
 
-    # Gateway used for /simulate (it runs the real plugins)
+    # Gateways used for /simulate (they run the real plugins). GATEWAY_URLS maps an environment to
+    # its own gateway, e.g. {"staging": "http://gw-staging:8100"}; GATEWAY_URL is the fallback.
     gateway_url: str | None = Field(None, alias="GATEWAY_URL")
+    gateway_urls: dict[str, str] = Field(default_factory=dict, alias="GATEWAY_URLS")
     http_timeout_seconds: float = Field(10.0, alias="HTTP_TIMEOUT_SECONDS")
 
     # Optional read-only DSN for analytics over the gateway's audit schema
     audit_dsn: str | None = Field(None, alias="AUDIT_DSN")
+
+    # Built console (apps/console/dist). Served at /console when the directory exists.
+    console_dir: str = Field("/app/console", alias="CONSOLE_DIR")
 
 
 @lru_cache

@@ -1,0 +1,240 @@
+{{- if .Values.gateway.enabled }}
+{{- $c := dict "root" $ "component" "gateway" -}}
+{{- $g := .Values.gateway -}}
+{{- $app := eq .Values.mtls.mode "app" -}}
+{{- $perReplica := 0 -}}
+{{- if gt (int $g.rateLimitPerMinute) 0 -}}
+{{- $perReplica = max 1 (div (add $g.rateLimitPerMinute (sub $g.replicas 1)) $g.replicas) -}}
+{{- end }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "gp.name" $c }}
+  labels: {{- include "gp.labels" $c | nindent 4 }}
+automountServiceAccountToken: false
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "gp.name" (dict "root" $ "component" "opa-policies") }}
+  labels: {{- include "gp.labels" $c | nindent 4 }}
+data:
+  {{- (.Files.Glob "files/policies/*.rego").AsConfig | nindent 2 }}
+{{- if eq $g.configSource "file" }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "gp.name" (dict "root" $ "component" "snapshot") }}
+  labels: {{- include "gp.labels" $c | nindent 4 }}
+data:
+  {{ .Values.global.environment }}.json: {{ required "gateway.snapshot is required when gateway.configSource=file" $g.snapshot | toJson | quote }}
+{{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "gp.name" $c }}
+  labels: {{- include "gp.labels" $c | nindent 4 }}
+spec:
+  selector: {{- include "gp.selectorLabels" $c | nindent 4 }}
+  ports:
+    - name: http
+      port: {{ $g.port }}
+      targetPort: http
+    {{- if $app }}
+    - name: internal
+      port: {{ $g.internalPort }}
+      targetPort: internal
+    {{- end }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "gp.name" $c }}
+  labels: {{- include "gp.labels" $c | nindent 4 }}
+spec:
+  {{- if not $g.autoscaling.enabled }}
+  replicas: {{ $g.replicas }}
+  {{- end }}
+  revisionHistoryLimit: 5
+  strategy:
+    rollingUpdate: {maxSurge: 1, maxUnavailable: 0}
+  selector:
+    matchLabels: {{- include "gp.selectorLabels" $c | nindent 6 }}
+  template:
+    metadata:
+      labels: {{- include "gp.labels" $c | nindent 8 }}
+      annotations:
+        checksum/policies: {{ (.Files.Glob "files/policies/*.rego").AsConfig | sha256sum }}
+        {{- include "gp.podAnnotations" (dict "root" $ "metricsPort" $g.port) | nindent 8 }}
+    spec:
+      serviceAccountName: {{ include "gp.name" $c }}
+      automountServiceAccountToken: false
+      securityContext: {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      {{- include "gp.scheduling" $ | nindent 6 }}
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels: {{- include "gp.selectorLabels" $c | nindent 14 }}
+      initContainers:
+        # Schema migrations. Concurrent runs wait on a Postgres advisory lock (alembic/env.py).
+        - name: migrate
+          image: {{ include "gp.image" (dict "root" $ "image" $g.image) }}
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          command: ["alembic", "upgrade", "head"]
+          env:
+            {{- include "gp.dsnEnv" (dict "root" $ "key" "GATEWAY_POSTGRES_DSN") | nindent 12 }}
+          securityContext: {{- toYaml .Values.containerSecurityContext | nindent 12 }}
+          resources:
+            requests: {cpu: 50m, memory: 128Mi}
+            limits: {memory: 256Mi}
+          volumeMounts:
+            - {name: tmp, mountPath: /tmp}
+      containers:
+        - name: gateway
+          image: {{ include "gp.image" (dict "root" $ "image" $g.image) }}
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          command: ["python", "-m", "app.serve"]
+          ports:
+            - {name: http, containerPort: {{ $g.port }}}
+            {{- if $app }}
+            - {name: internal, containerPort: {{ $g.internalPort }}}
+            {{- end }}
+          env:
+            - {name: PORT, value: {{ $g.port | quote }}}
+            - {name: GATEWAY_ENV, value: {{ .Values.global.environment | quote }}}
+            - name: GATEWAY_ID
+              valueFrom: {fieldRef: {fieldPath: metadata.name}}
+            - {name: LOG_LEVEL, value: {{ .Values.global.logLevel | quote }}}
+            {{- include "gp.dsnEnv" (dict "root" $ "key" "GATEWAY_POSTGRES_DSN") | nindent 12 }}
+            {{- include "gp.redisEnv" (dict "root" $ "db" 0) | nindent 12 }}
+            - {name: OPA_URL, value: "http://127.0.0.1:8181"}
+            - {name: CONFIG_SOURCE, value: {{ $g.configSource | quote }}}
+            {{- if eq $g.configSource "control_plane" }}
+            - {name: CONTROL_PLANE_URL, value: {{ include "gp.controlPlaneUrl" $ | quote }}}
+            {{- else }}
+            - {name: SNAPSHOT_PATH, value: {{ printf "/app/config/snapshots/%s.json" .Values.global.environment | quote }}}
+            {{- end }}
+            - {name: CACHE_DIR, value: /var/cache/guardrail-gateway}
+            {{- include "gp.secretEnv" (dict "root" $ "name" "INTERNAL_TOKEN") | nindent 12 }}
+            {{- include "gp.secretEnv" (dict "root" $ "name" "AI_GATEWAY_API_KEY") | nindent 12 }}
+            {{- include "gp.secretEnv" (dict "root" $ "name" "AI_GATEWAY_PROJECT_ID") | nindent 12 }}
+            {{- if .Values.aiGateway.enabled }}
+            - name: AI_GATEWAY_URL
+              value: {{ printf "http://%s:%v" (include "gp.name" (dict "root" $ "component" "redaction")) .Values.aiGateway.redaction.port | quote }}
+            {{- end }}
+            - {name: MAX_BODY_BYTES, value: {{ $g.maxBodyBytes | int64 | quote }}}
+            - {name: DEFAULT_GUARDRAIL_TIMEOUT_MS, value: {{ $g.defaultGuardrailTimeoutMs | quote }}}
+            - {name: GUARD_RATE_LIMIT_PER_MINUTE, value: {{ $perReplica | int64 | quote }}}
+            - {name: AUDIT_RETENTION_MONTHS, value: {{ $g.audit.retentionMonths | quote }}}
+            - {name: AUDIT_MAINTENANCE, value: {{ ternary "false" "true" .Values.auditRetention.enabled | quote }}}
+            - {name: AUDIT_SPOOL_DIR, value: /var/cache/guardrail-gateway/audit-spool}
+            {{- if $g.proxy.enabled }}
+            - {name: PROXY_ENABLED, value: "true"}
+            - {name: PROXY_UPSTREAM_URL, value: {{ $g.proxy.upstreamUrl | quote }}}
+            - {name: PROXY_DEFAULT_AGENT_ID, value: {{ $g.proxy.defaultAgentId | quote }}}
+            - {name: PROXY_MODELS, value: {{ $g.proxy.models | toJson | quote }}}
+            {{- include "gp.secretEnv" (dict "root" $ "name" "PROXY_UPSTREAM_API_KEY") | nindent 12 }}
+            {{- end }}
+            {{- if $g.otelEndpoint }}
+            - {name: OTEL_EXPORTER_OTLP_ENDPOINT, value: {{ $g.otelEndpoint | quote }}}
+            {{- end }}
+            {{- include "gp.mtlsEnv" (dict "root" $ "internalPort" $g.internalPort) | nindent 12 }}
+            {{- with $g.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          startupProbe:
+            httpGet: {path: /health, port: http}
+            periodSeconds: 2
+            failureThreshold: 60
+          readinessProbe:
+            # not ready without a snapshot, the catalog, OPA or the database: traffic goes elsewhere
+            httpGet: {path: /ready, port: http}
+            periodSeconds: 5
+            failureThreshold: 2
+          livenessProbe:
+            httpGet: {path: /health, port: http}
+            periodSeconds: 10
+            failureThreshold: 3
+          resources: {{- toYaml $g.resources | nindent 12 }}
+          securityContext: {{- toYaml .Values.containerSecurityContext | nindent 12 }}
+          volumeMounts:
+            - {name: cache, mountPath: /var/cache/guardrail-gateway}
+            - {name: tmp, mountPath: /tmp}
+            {{- if eq $g.configSource "file" }}
+            - {name: snapshot, mountPath: /app/config/snapshots, readOnly: true}
+            {{- end }}
+            {{- if $app }}
+            - {name: certs, mountPath: /certs, readOnly: true}
+            {{- end }}
+        - name: opa
+          image: {{ .Values.opa.image }}
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          args: ["run", "--server", "--addr=0.0.0.0:8181", "--log-level=info", "--watch", "/policies"]
+          ports:
+            - {name: opa, containerPort: 8181}
+          readinessProbe:
+            httpGet: {path: /health, port: opa}
+            periodSeconds: 5
+          livenessProbe:
+            httpGet: {path: /health, port: opa}
+            periodSeconds: 10
+          resources: {{- toYaml .Values.opa.resources | nindent 12 }}
+          securityContext: {{- toYaml .Values.containerSecurityContext | nindent 12 }}
+          volumeMounts:
+            - {name: policies, mountPath: /policies, readOnly: true}
+      volumes:
+        - name: cache
+          emptyDir: {sizeLimit: {{ $g.audit.spoolSizeLimit }}}
+        - name: tmp
+          emptyDir: {sizeLimit: 64Mi}
+        - name: policies
+          configMap:
+            name: {{ include "gp.name" (dict "root" $ "component" "opa-policies") }}
+        {{- if eq $g.configSource "file" }}
+        - name: snapshot
+          configMap:
+            name: {{ include "gp.name" (dict "root" $ "component" "snapshot") }}
+        {{- end }}
+        {{- if $app }}
+        - name: certs
+          secret:
+            secretName: {{ include "gp.mtlsSecret" (dict "root" $ "component" "gateway" "key" "gateway") }}
+            defaultMode: 0440
+        {{- end }}
+{{- if $g.autoscaling.enabled }}
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: {{ include "gp.name" $c }}
+  labels: {{- include "gp.labels" $c | nindent 4 }}
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: {{ include "gp.name" $c }}
+  minReplicas: {{ $g.autoscaling.minReplicas }}
+  maxReplicas: {{ $g.autoscaling.maxReplicas }}
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target: {type: Utilization, averageUtilization: {{ $g.autoscaling.targetCPUUtilizationPercentage }}}
+{{- end }}
+{{- if $g.pdb.enabled }}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "gp.name" $c }}
+  labels: {{- include "gp.labels" $c | nindent 4 }}
+spec:
+  minAvailable: {{ $g.pdb.minAvailable }}
+  selector:
+    matchLabels: {{- include "gp.selectorLabels" $c | nindent 6 }}
+{{- end }}
+{{- end }}

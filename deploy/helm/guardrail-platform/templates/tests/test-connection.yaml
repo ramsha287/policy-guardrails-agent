@@ -1,0 +1,36 @@
+{{- /* helm test <release>: the gateway and the control plane answer /ready from inside the cluster. */ -}}
+apiVersion: v1
+kind: Pod
+metadata:
+  name: {{ include "gp.name" (dict "root" $ "component" "test") }}
+  labels: {{- include "gp.labels" (dict "root" $ "component" "helm-test") | nindent 4 }}
+  annotations:
+    helm.sh/hook: test
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+spec:
+  restartPolicy: Never
+  automountServiceAccountToken: false
+  securityContext: {{- toYaml .Values.podSecurityContext | nindent 4 }}
+  containers:
+    - name: ready
+      image: {{ include "gp.image" (dict "root" $ "image" .Values.gateway.image) }}
+      command:
+        - python
+        - -c
+        - |
+          import sys, urllib.request
+          urls = sys.argv[1:]
+          for u in urls:
+              with urllib.request.urlopen(u, timeout=10) as r:
+                  print(u, r.status)
+      args:
+        {{- if .Values.gateway.enabled }}
+        - {{ printf "http://%s:%v/ready" (include "gp.name" (dict "root" $ "component" "gateway")) .Values.gateway.port | quote }}
+        {{- end }}
+        {{- if .Values.controlPlane.enabled }}
+        - {{ printf "http://%s:%v/ready" (include "gp.name" (dict "root" $ "component" "control-plane")) .Values.controlPlane.port | quote }}
+        {{- end }}
+      securityContext: {{- toYaml .Values.containerSecurityContext | nindent 8 }}
+      resources:
+        requests: {cpu: 10m, memory: 32Mi}
+        limits: {memory: 128Mi}

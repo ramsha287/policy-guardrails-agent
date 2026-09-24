@@ -177,6 +177,7 @@ async def test_simulate_calls_gateway_with_working_set():
     alice, _, _ = await env.keys()
     await seed(env, alice)
     await env.client.put(f"{BASE}/environments/dev/assignments/global-pii", json=pii_assignment(), headers=alice)
+    await env.client.post(f"{BASE}/tenants", json={"id": "acme", "name": "Acme"}, headers=alice)
     r = await env.client.post(
         f"{BASE}/simulate",
         json={
@@ -190,3 +191,72 @@ async def test_simulate_calls_gateway_with_working_set():
     assert r.status_code == 200, r.text
     assert r.json()["result"] == {"decision": "modify"} and seen["token"] == TOKEN
     assert b"global-pii" in seen["body"]
+
+
+async def test_simulate_reports_why_the_gateway_refused():
+    env = Env(gateway_handler=lambda r: httpx.Response(422, json={"error": "guardrail noop@9.9.9 is not installed"}))
+    alice, _, _ = await env.keys()
+    await seed(env, alice)
+    await env.client.post(f"{BASE}/tenants", json={"id": "acme", "name": "Acme"}, headers=alice)
+    body = {
+        "environment": "staging",
+        "tenant_id": "acme",
+        "stage": "input",
+        "request": {"agent_id": "bot", "action": "llm.chat", "payload": {"text": "hi"}},
+    }
+    r = await env.client.post(f"{BASE}/simulate", json=body, headers=alice)
+    assert r.status_code == 422 and "noop@9.9.9 is not installed" in r.json()["error"]
+    r = await env.client.post(f"{BASE}/simulate", json={**body, "environment": "qa"}, headers=alice)
+    assert r.status_code == 422  # unknown environment is rejected before any gateway call
+
+
+async def test_me_reflects_roles_and_scope():
+    env = Env()
+    alice, _, viewer = await env.keys()
+    svc = AdminKeyService(env.container.ctx)
+    _, tenant_admin = await svc.create(None, "acme-admin", ["admin"], tenant_id="acme")
+    me = (await env.client.get(f"{BASE}/me", headers=alice)).json()
+    assert me["platform"] is True and "publish:approve" in me["permissions"]
+    assert me["two_person_environments"] == ["production"] and me["features"]["simulate"] is True
+    assert me["features"]["analytics"] is False  # no AUDIT_DSN in tests
+    v = (await env.client.get(f"{BASE}/me", headers=viewer)).json()
+    assert v["permissions"] == ["read"]
+    t = (await env.client.get(f"{BASE}/me", headers={"X-Admin-Key": tenant_admin})).json()
+    assert t["tenant_id"] == "acme" and "publish:request" not in t["permissions"]  # platform-only
+    assert (await env.client.get(f"{BASE}/me")).status_code == 401
+
+
+async def test_analytics_without_audit_dsn_is_503():
+    env = Env()
+    alice, _, _ = await env.keys()
+    r = await env.client.get(f"{BASE}/analytics/guardrails", headers=alice)
+    assert r.status_code == 503 and "AUDIT_DSN" in r.json()["error"]
+
+
+async def test_console_is_served_with_security_headers(tmp_path):
+    (tmp_path / "assets").mkdir()
+    (tmp_path / "index.html").write_text("<!doctype html><div id=root></div>")
+    (tmp_path / "assets" / "index-abc.js").write_text("console.log(1)")
+    env = Env()
+    settings = Settings(postgres_dsn="postgresql+asyncpg://unused/db", internal_token=TOKEN, console_dir=str(tmp_path))
+    app = create_app(settings, env.container)
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://cp") as c:
+        page = await c.get("/console/")
+        asset = await c.get("/console/assets/index-abc.js")
+        review = await c.get("/review")
+        api = await c.get(f"{BASE}/tenants")
+    assert page.status_code == 200 and "root" in page.text
+    csp = page.headers["content-security-policy"]
+    assert "script-src 'self'" in csp and "frame-ancestors 'none'" in csp and "connect-src 'self'" in csp
+    assert page.headers["cache-control"] == "no-cache" and page.headers["x-frame-options"] == "DENY"
+    assert "immutable" in asset.headers["cache-control"]
+    assert review.status_code in (302, 307) and review.headers["location"] == "/console/#/reviews"
+    assert api.headers["cache-control"] == "no-store" and "content-security-policy" not in api.headers
+
+
+async def test_console_is_optional():
+    env = Env()
+    settings = Settings(postgres_dsn="postgresql+asyncpg://unused/db", internal_token=TOKEN, console_dir="/nonexistent")
+    app = create_app(settings, env.container)
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://cp") as c:
+        assert (await c.get("/console/")).status_code == 404

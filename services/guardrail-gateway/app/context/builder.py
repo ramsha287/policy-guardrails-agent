@@ -44,6 +44,14 @@ class ContextBuilder:
         self._catalog = catalog
         self._env = environment
 
+    @property
+    def catalog(self) -> CachedCatalog:
+        return self._catalog
+
+    def for_environment(self, environment: str) -> ContextBuilder:
+        """Same catalog, scored as if the request ran in `environment` (used by simulation)."""
+        return ContextBuilder(self._catalog, environment)
+
     async def build(self, *, principal: Principal, req: GuardRequest, request_id: str, trace_id: str) -> BuiltContext:
         cat = await self._catalog.get(principal.tenant_id)
         agent = cat.agent(req.agent_id)

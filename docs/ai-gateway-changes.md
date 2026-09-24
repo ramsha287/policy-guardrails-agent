@@ -87,6 +87,8 @@ Code: `RedactionService.redact_text_detailed()` and `_analyze_and_redact()` in
 ## Still open
 
 - **Redaction service reads `api_keys` directly.** It shares that table with project-service,
-  and now reads `scope` from it too. Moving key validation behind a project-service endpoint is
-  planned for phase 5.
+  and now reads `scope` from it too. This is coupling, not a vulnerability: both services are
+  behind NetworkPolicies and use the same database user in the chart. Moving key validation
+  behind a project-service endpoint (with a short cache) is still open. It was left out of
+  phase 5 because it changes the ai-gateway's request path and its own tests.
 - The project-service README still mentions MongoDB and Consul. The code uses PostgreSQL.

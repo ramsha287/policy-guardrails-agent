@@ -21,4 +21,4 @@ USER app
 EXPOSE 8100
 
 # Compose runs migrations here; on Kubernetes/k3s run `alembic upgrade head` as a Job instead.
-CMD ["sh", "-c", "alembic upgrade head && exec uvicorn --factory app.main:create_app --host 0.0.0.0 --port 8100 --proxy-headers"]
+CMD ["sh", "-c", "alembic upgrade head && exec python -m app.serve"]

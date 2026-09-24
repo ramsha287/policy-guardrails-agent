@@ -14,6 +14,7 @@ from typing import Any
 from ..domain.rbac import Permission, Principal
 from ..domain.records import ReviewRecord, utcnow
 from ..errors import NotFound, StateConflict
+from ..metrics import REVIEW_DECISIONS
 from .context import Ctx
 
 PREVIEW_CHARS = 500
@@ -78,8 +79,11 @@ class ReviewService:
         raw = None
         if include_raw:
             p.require(Permission.REVIEWS_RAW, r.tenant_id)
+        await self.ctx.log("review", review_id, "view", p.actor)  # every view is audited (plan section 7)
+        if include_raw:
             raw = self.ctx.cipher.decrypt(r.payload_enc)
-            await self.store.put_review(r.model_copy(update={"raw_viewed_by": [*r.raw_viewed_by, p.actor]}))
+            await self.store.add_review_raw_viewer(review_id, p.actor)
+            r = r.model_copy(update={"raw_viewed_by": [*r.raw_viewed_by, p.actor]})
             await self.ctx.log("review", review_id, "view_raw", p.actor)
         return r, raw
 
@@ -97,8 +101,18 @@ class ReviewService:
                 "decision_note": note[:1000],
             }
         )
-        await self.store.put_review(updated)
+        won = await self.store.decide_review(
+            review_id,
+            status=updated.status,
+            reviewer=p.actor,
+            decided_at=updated.decided_at,  # type: ignore[arg-type]
+            decision_note=updated.decision_note,
+        )
+        if not won:  # someone else decided it between our read and this write
+            current = await self._get(review_id)
+            raise StateConflict(f"review is already {current.effective_status()} (by {current.reviewer})")
         await self.ctx.log("review", review_id, "approve" if approve else "reject", p.actor, after={"note": note[:200]})
+        REVIEW_DECISIONS.labels("approved" if approve else "rejected").inc()
         return updated
 
     async def status_for_gateway(self, review_id: str, tenant_id: str) -> dict[str, Any]:

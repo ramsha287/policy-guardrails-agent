@@ -18,6 +18,7 @@ class Principal:
     tenant_id: str
     key_name: str
     scopes: frozenset[str]
+    rate_limit_per_minute: int | None = None  # None = the gateway default (GUARD_RATE_LIMIT_PER_MINUTE)
 
 
 def hash_key(raw: str) -> str:

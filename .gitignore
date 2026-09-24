@@ -12,3 +12,11 @@ dist/
 *.env
 !*.env.example
 bootstrap/
+
+# console
+node_modules/
+apps/console/screenshots/
+
+# decrypted secrets must never be committed
+*.dec.yaml
+deploy/secrets/**/secrets.yaml

@@ -1,0 +1,55 @@
+# mTLS between the gateway and the control plane without a service mesh.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.mtls.yml up --build
+#
+# A one-shot `dev-certs` container creates a private CA and one certificate per service in the
+# `certs` volume. Internal routes move to their own ports and require a client certificate:
+#   control plane  :8200 console + admin API (plain, as before)   :8201 /cp/v1/internal (mTLS)
+#   gateway        :8100 /v1/guard for agents (plain, as before)  :8101 /internal (mTLS)
+# On Kubernetes, prefer the chart's `mtls.mode: linkerd` (or certManager); see deploy/helm.
+
+x-mtls: &mtls
+  TLS_CA_FILE: /certs/ca.crt
+  TLS_CLIENT_CA_FILE: /certs/ca.crt
+
+services:
+  dev-certs:
+    build:
+      context: .
+      dockerfile: services/guardrail-control-plane/Dockerfile
+    user: root
+    command: ["python", "-m", "app.cli", "dev-certs", "--out", "/certs", "--owner-uid", "10001",
+              "--names", "guardrail-control-plane,guardrail-gateway"]
+    volumes:
+      - certs:/certs
+    restart: "no"
+
+  guardrail-control-plane:
+    environment:
+      <<: *mtls
+      INTERNAL_PORT: "8201"
+      TLS_CERT_FILE: /certs/guardrail-control-plane.crt
+      TLS_KEY_FILE: /certs/guardrail-control-plane.key
+      TLS_CLIENT_CERT_FILE: /certs/guardrail-control-plane.crt
+      TLS_CLIENT_KEY_FILE: /certs/guardrail-control-plane.key
+      GATEWAY_URL: https://guardrail-gateway:8101
+    volumes:
+      - certs:/certs:ro
+    depends_on:
+      dev-certs:
+        condition: service_completed_successfully
+
+  guardrail-gateway:
+    environment:
+      <<: *mtls
+      INTERNAL_PORT: "8101"
+      TLS_CERT_FILE: /certs/guardrail-gateway.crt
+      TLS_KEY_FILE: /certs/guardrail-gateway.key
+      TLS_CLIENT_CERT_FILE: /certs/guardrail-gateway.crt
+      TLS_CLIENT_KEY_FILE: /certs/guardrail-gateway.key
+      CONTROL_PLANE_URL: https://guardrail-control-plane:8201
+    volumes:
+      - certs:/certs:ro
+
+volumes:
+  certs:

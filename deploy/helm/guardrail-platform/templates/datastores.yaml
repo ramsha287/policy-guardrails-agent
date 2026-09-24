@@ -1,0 +1,142 @@
+{{- if .Values.postgresql.enabled }}
+{{- $c := dict "root" $ "component" "postgres" -}}
+{{- $pg := .Values.postgresql -}}
+# Single-instance Postgres for k3s and small installs. Not highly available: for production HA use
+# a managed database or CloudNativePG and set postgresql.enabled=false.
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "gp.name" $c }}
+  labels: {{- include "gp.labels" $c | nindent 4 }}
+spec:
+  selector: {{- include "gp.selectorLabels" $c | nindent 4 }}
+  ports:
+    - {name: postgres, port: {{ $pg.port }}, targetPort: postgres}
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "gp.name" $c }}
+  labels: {{- include "gp.labels" $c | nindent 4 }}
+spec:
+  serviceName: {{ include "gp.name" $c }}
+  replicas: 1
+  selector:
+    matchLabels: {{- include "gp.selectorLabels" $c | nindent 6 }}
+  template:
+    metadata:
+      labels: {{- include "gp.labels" $c | nindent 8 }}
+      {{- if eq .Values.mtls.mode "linkerd" }}
+      annotations:
+        linkerd.io/inject: enabled
+      {{- end }}
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 70          # postgres user in the alpine image
+        runAsGroup: 70
+        fsGroup: 70
+        seccompProfile: {type: RuntimeDefault}
+      {{- include "gp.scheduling" $ | nindent 6 }}
+      containers:
+        - name: postgres
+          image: {{ $pg.image }}
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          ports:
+            - {name: postgres, containerPort: {{ $pg.port }}}
+          env:
+            - {name: POSTGRES_DB, value: {{ $pg.database | quote }}}
+            - {name: POSTGRES_USER, value: {{ $pg.username | quote }}}
+            {{- include "gp.secretEnv" (dict "root" $ "name" "POSTGRES_PASSWORD") | nindent 12 }}
+            - {name: PGDATA, value: /var/lib/postgresql/data/pgdata}
+          readinessProbe:
+            exec: {command: ["pg_isready", "-U", {{ $pg.username | quote }}, "-d", {{ $pg.database | quote }}]}
+            periodSeconds: 5
+          livenessProbe:
+            exec: {command: ["pg_isready", "-U", {{ $pg.username | quote }}, "-d", {{ $pg.database | quote }}]}
+            periodSeconds: 15
+            failureThreshold: 6
+          resources: {{- toYaml $pg.resources | nindent 12 }}
+          securityContext: {{- toYaml .Values.containerSecurityContext | nindent 12 }}
+          volumeMounts:
+            - {name: data, mountPath: /var/lib/postgresql/data}
+            - {name: run, mountPath: /var/run/postgresql}
+            - {name: tmp, mountPath: /tmp}
+      volumes:
+        - name: run
+          emptyDir: {}
+        - name: tmp
+          emptyDir: {sizeLimit: 64Mi}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: [ReadWriteOnce]
+        {{- if $pg.storage.storageClassName }}
+        storageClassName: {{ $pg.storage.storageClassName }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ $pg.storage.size }}
+{{- end }}
+{{- if .Values.redis.enabled }}
+{{- $c := dict "root" $ "component" "redis" }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "gp.name" $c }}
+  labels: {{- include "gp.labels" $c | nindent 4 }}
+spec:
+  selector: {{- include "gp.selectorLabels" $c | nindent 4 }}
+  ports:
+    - {name: redis, port: 6379, targetPort: redis}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "gp.name" $c }}
+  labels: {{- include "gp.labels" $c | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {{- include "gp.selectorLabels" $c | nindent 6 }}
+  template:
+    metadata:
+      labels: {{- include "gp.labels" $c | nindent 8 }}
+      {{- if eq .Values.mtls.mode "linkerd" }}
+      annotations:
+        linkerd.io/inject: enabled
+      {{- end }}
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 999         # redis user in the alpine image
+        runAsGroup: 999
+        fsGroup: 999
+        seccompProfile: {type: RuntimeDefault}
+      {{- include "gp.scheduling" $ | nindent 6 }}
+      containers:
+        - name: redis
+          image: {{ .Values.redis.image }}
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          # Pub/sub and short-lived plugin state only: no persistence needed.
+          args: ["redis-server", "--save", "", "--appendonly", "no"]
+          ports:
+            - {name: redis, containerPort: 6379}
+          readinessProbe:
+            exec: {command: ["redis-cli", "ping"]}
+            periodSeconds: 5
+          livenessProbe:
+            tcpSocket: {port: redis}
+            periodSeconds: 15
+          resources: {{- toYaml .Values.redis.resources | nindent 12 }}
+          securityContext: {{- toYaml .Values.containerSecurityContext | nindent 12 }}
+          volumeMounts:
+            - {name: data, mountPath: /data}
+      volumes:
+        - name: data
+          emptyDir: {sizeLimit: 128Mi}
+{{- end }}

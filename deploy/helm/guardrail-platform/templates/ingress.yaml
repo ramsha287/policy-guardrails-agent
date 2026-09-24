@@ -1,0 +1,35 @@
+{{- range $name, $spec := dict "control-plane" .Values.controlPlane "gateway" .Values.gateway }}
+{{- if and $spec.enabled $spec.ingress.enabled }}
+{{- $c := dict "root" $ "component" $name }}
+---
+# Standard Ingress (Traefik on k3s). Only the public ports: /cp/v1/internal and /internal are
+# refused on them anyway when mtls.mode=app (separate internal port).
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "gp.name" $c }}
+  labels: {{- include "gp.labels" $c | nindent 4 }}
+  {{- with $spec.ingress.annotations }}
+  annotations: {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  {{- if $spec.ingress.className }}
+  ingressClassName: {{ $spec.ingress.className }}
+  {{- end }}
+  {{- if $spec.ingress.tlsSecretName }}
+  tls:
+    - hosts: [{{ $spec.ingress.host | quote }}]
+      secretName: {{ $spec.ingress.tlsSecretName }}
+  {{- end }}
+  rules:
+    - host: {{ $spec.ingress.host | quote }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "gp.name" $c }}
+                port: {name: http}
+{{- end }}
+{{- end }}

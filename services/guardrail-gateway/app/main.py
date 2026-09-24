@@ -6,6 +6,7 @@ import asyncio
 import logging
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 import httpx
 from fastapi import FastAPI, Request
@@ -13,6 +14,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from sqlalchemy import text
 
+from app.audit.spool import AuditSpool
 from app.audit.writer import AuditWriter
 from app.config import Settings, get_settings, load_env_file
 from app.context.builder import ContextBuilder
@@ -24,13 +26,16 @@ from app.engine.remote import CatalogHolder, ControlPlaneClient, ControlPlaneSyn
 from app.engine.state import RedisStateStore
 from app.gateway.auth import Authenticator
 from app.gateway.middleware import BodySizeLimitMiddleware, RequestContextMiddleware
+from app.gateway.proxy import ChatProxy, ProxyConfig
+from app.gateway.ratelimit import RateLimiter
 from app.observability import setup_logging, setup_tracing
 from app.policy.opa import OpaClient
 from app.repositories.api_keys import PgApiKeyStore
 from app.repositories.catalog import PgCatalogStore
-from app.routers import escalations, guard, health, internal
+from app.routers import escalations, guard, health, internal, proxy
 from app.services import Services
 from guardrail_sdk import EnvSecretReader, PluginContext
+from guardrail_sdk.tls import ClientTLS
 
 logger = logging.getLogger(__name__)
 
@@ -49,10 +54,11 @@ async def _production_lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     db = make_engine(settings.postgres_dsn)
     sm = make_sessionmaker(db)
+    tls = ClientTLS.from_env().ssl_context()  # TLS_CA_FILE / TLS_CLIENT_CERT_FILE for mTLS without a mesh
     http = httpx.AsyncClient(
         timeout=httpx.Timeout(settings.http_timeout_seconds),
         limits=httpx.Limits(max_connections=200, max_keepalive_connections=50),
-        transport=httpx.AsyncHTTPTransport(retries=1),
+        transport=httpx.AsyncHTTPTransport(retries=1, verify=tls),
     )
     state = RedisStateStore(settings.redis_url) if settings.redis_url else None
     plugin_ctx = PluginContext(http=http, secrets=EnvSecretReader(), state=state, environment=settings.environment)
@@ -99,6 +105,10 @@ async def _production_lifespan(app: FastAPI) -> AsyncIterator[None]:
         batch_size=settings.audit_batch_size,
         flush_seconds=settings.audit_flush_seconds,
         retention_months=settings.audit_retention_months,
+        maintenance=settings.audit_maintenance,
+        spool=AuditSpool(Path(settings.audit_spool_dir), settings.audit_spool_max_mb * 1024 * 1024)
+        if settings.audit_spool_dir
+        else None,
     )
     await audit.start()
 
@@ -123,6 +133,7 @@ async def _production_lifespan(app: FastAPI) -> AsyncIterator[None]:
         ),
         snapshots=snapshots,
         audit=audit,
+        limiter=RateLimiter(settings.guard_rate_limit_per_minute),
         readiness={
             "database": db_ok,
             "opa": opa.healthy,
@@ -132,6 +143,21 @@ async def _production_lifespan(app: FastAPI) -> AsyncIterator[None]:
         registry=registry,
         control_plane=control_plane,
     )
+    upstream: httpx.AsyncClient | None = None
+    if settings.proxy_enabled:
+        # Separate client: public TLS to the LLM provider, long timeouts, no internal client cert.
+        upstream = httpx.AsyncClient(timeout=httpx.Timeout(settings.proxy_timeout_seconds, connect=10.0))
+        app.state.services.proxy = ChatProxy(
+            app.state.services,
+            ProxyConfig(
+                upstream_url=settings.proxy_upstream_url,
+                upstream_api_key=settings.proxy_upstream_api_key,
+                default_agent_id=settings.proxy_default_agent_id,
+                models=frozenset(settings.proxy_models),
+            ),
+            upstream,
+        )
+        logger.info("proxy mode on: /v1/chat/completions -> %s", settings.proxy_upstream_url)
     logger.info("guardrail-gateway ready (env=%s, snapshot=%s)", settings.environment, snapshots.version)
     try:
         yield
@@ -141,6 +167,8 @@ async def _production_lifespan(app: FastAPI) -> AsyncIterator[None]:
         await audit.stop()
         await snapshots.close()
         await http.aclose()
+        if upstream is not None:
+            await upstream.aclose()
         if state is not None:
             await state.close()
         await db.dispose()
@@ -178,6 +206,7 @@ def create_app(settings: Settings | None = None, services: Services | None = Non
     app.include_router(guard.router)
     app.include_router(escalations.router)
     app.include_router(internal.router)
+    app.include_router(proxy.router)
     setup_tracing(app, settings.otel_endpoint)
     return app
 

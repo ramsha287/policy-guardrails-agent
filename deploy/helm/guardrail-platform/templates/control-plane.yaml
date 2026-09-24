@@ -1,0 +1,147 @@
+{{- if .Values.controlPlane.enabled }}
+{{- $c := dict "root" $ "component" "control-plane" -}}
+{{- $cp := .Values.controlPlane -}}
+{{- $app := eq .Values.mtls.mode "app" -}}
+{{- $gatewayUrls := dict -}}
+{{- if .Values.gateway.enabled -}}
+{{- $_ := set $gatewayUrls .Values.global.environment (include "gp.gatewayInternalUrl" $) -}}
+{{- end -}}
+{{- range $env, $url := $cp.gatewayUrls -}}
+{{- $_ := set $gatewayUrls $env $url -}}
+{{- end }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "gp.name" $c }}
+  labels: {{- include "gp.labels" $c | nindent 4 }}
+automountServiceAccountToken: false
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "gp.name" $c }}
+  labels: {{- include "gp.labels" $c | nindent 4 }}
+spec:
+  selector: {{- include "gp.selectorLabels" $c | nindent 4 }}
+  ports:
+    - name: http
+      port: {{ $cp.port }}
+      targetPort: http
+    {{- if $app }}
+    - name: internal
+      port: {{ $cp.internalPort }}
+      targetPort: internal
+    {{- end }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "gp.name" $c }}
+  labels: {{- include "gp.labels" $c | nindent 4 }}
+spec:
+  replicas: {{ $cp.replicas }}
+  revisionHistoryLimit: 5
+  strategy:
+    rollingUpdate: {maxSurge: 1, maxUnavailable: 0}
+  selector:
+    matchLabels: {{- include "gp.selectorLabels" $c | nindent 6 }}
+  template:
+    metadata:
+      labels: {{- include "gp.labels" $c | nindent 8 }}
+      {{- $ann := include "gp.podAnnotations" (dict "root" $ "metricsPort" $cp.port) }}
+      {{- if $ann }}
+      annotations: {{- $ann | nindent 8 }}
+      {{- end }}
+    spec:
+      serviceAccountName: {{ include "gp.name" $c }}
+      automountServiceAccountToken: false
+      securityContext: {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      {{- include "gp.scheduling" $ | nindent 6 }}
+      initContainers:
+        - name: migrate
+          image: {{ include "gp.image" (dict "root" $ "image" $cp.image) }}
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          command: ["alembic", "upgrade", "head"]
+          env:
+            {{- include "gp.dsnEnv" (dict "root" $ "key" "CONTROL_PLANE_POSTGRES_DSN") | nindent 12 }}
+          securityContext: {{- toYaml .Values.containerSecurityContext | nindent 12 }}
+          resources:
+            requests: {cpu: 50m, memory: 128Mi}
+            limits: {memory: 256Mi}
+          volumeMounts:
+            - {name: tmp, mountPath: /tmp}
+      containers:
+        - name: control-plane
+          image: {{ include "gp.image" (dict "root" $ "image" $cp.image) }}
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          command: ["python", "-m", "app.serve"]
+          ports:
+            - {name: http, containerPort: {{ $cp.port }}}
+            {{- if $app }}
+            - {name: internal, containerPort: {{ $cp.internalPort }}}
+            {{- end }}
+          env:
+            - {name: PORT, value: {{ $cp.port | quote }}}
+            - {name: LOG_LEVEL, value: {{ .Values.global.logLevel | quote }}}
+            {{- include "gp.dsnEnv" (dict "root" $ "key" "CONTROL_PLANE_POSTGRES_DSN") | nindent 12 }}
+            {{- if $cp.analytics }}
+            {{- if .Values.postgresql.enabled }}
+            - {name: AUDIT_DSN, value: "$(POSTGRES_DSN)"}
+            {{- else }}
+            {{- include "gp.secretEnv" (dict "root" $ "name" "AUDIT_DSN" "optional" true) | nindent 12 }}
+            {{- end }}
+            {{- end }}
+            {{- include "gp.redisEnv" (dict "root" $ "db" 0) | nindent 12 }}
+            {{- include "gp.secretEnv" (dict "root" $ "name" "INTERNAL_TOKEN") | nindent 12 }}
+            {{- include "gp.secretEnv" (dict "root" $ "name" "REVIEW_ENCRYPTION_KEY") | nindent 12 }}
+            - {name: TWO_PERSON_ENVIRONMENTS, value: {{ $cp.twoPersonEnvironments | toJson | quote }}}
+            - {name: REVIEW_TTL_MINUTES, value: {{ $cp.reviewTtlMinutes | quote }}}
+            - {name: PUBLISH_REQUEST_TTL_HOURS, value: {{ $cp.publishRequestTtlHours | quote }}}
+            - {name: GATEWAY_STALE_SECONDS, value: {{ $cp.gatewayStaleSeconds | quote }}}
+            {{- if hasKey $gatewayUrls .Values.global.environment }}
+            - {name: GATEWAY_URL, value: {{ index $gatewayUrls .Values.global.environment | quote }}}
+            {{- end }}
+            - {name: GATEWAY_URLS, value: {{ $gatewayUrls | toJson | quote }}}
+            {{- include "gp.mtlsEnv" (dict "root" $ "internalPort" $cp.internalPort) | nindent 12 }}
+            {{- with $cp.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          startupProbe:
+            httpGet: {path: /health, port: http}
+            periodSeconds: 2
+            failureThreshold: 60
+          readinessProbe:
+            httpGet: {path: /ready, port: http}
+            periodSeconds: 5
+          livenessProbe:
+            httpGet: {path: /health, port: http}
+            periodSeconds: 10
+          resources: {{- toYaml $cp.resources | nindent 12 }}
+          securityContext: {{- toYaml .Values.containerSecurityContext | nindent 12 }}
+          volumeMounts:
+            - {name: tmp, mountPath: /tmp}
+            {{- if $app }}
+            - {name: certs, mountPath: /certs, readOnly: true}
+            {{- end }}
+      volumes:
+        - name: tmp
+          emptyDir: {sizeLimit: 64Mi}
+        {{- if $app }}
+        - name: certs
+          secret:
+            secretName: {{ include "gp.mtlsSecret" (dict "root" $ "component" "control-plane" "key" "controlPlane") }}
+            defaultMode: 0440
+        {{- end }}
+{{- if $cp.pdb.enabled }}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "gp.name" $c }}
+  labels: {{- include "gp.labels" $c | nindent 4 }}
+spec:
+  minAvailable: {{ $cp.pdb.minAvailable }}
+  selector:
+    matchLabels: {{- include "gp.selectorLabels" $c | nindent 6 }}
+{{- end }}
+{{- end }}

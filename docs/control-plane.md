@@ -11,6 +11,9 @@ where** and for the **tenant catalog**. Gateways pull from it, so a change needs
 Both documents are immutable and versioned. Snapshot versions look like `production-00012-3fa9c2d1`
 (environment, per-environment sequence, content hash).
 
+Most of what follows can also be done in the **console** at `http://<control-plane>/console/`
+([apps/console](../apps/console/README.md)). It uses this API, with the same roles.
+
 ## How gateways stay in sync
 
 Set `CONFIG_SOURCE=control_plane`, `CONTROL_PLANE_URL` and `INTERNAL_TOKEN` on the gateway. With
@@ -32,7 +35,9 @@ as in phases 1–3.
 
 ## Authentication and roles
 
-Call the API with `X-Admin-Key: ck_...`. Admin keys are separate from gateway API keys.
+Call the API with `X-Admin-Key: cpk_...`. Admin keys are separate from gateway API keys.
+`GET /cp/v1/me` returns the key's roles, tenant and permissions (the console uses it to show only
+what the key can do).
 
 | Role | Can |
 | --- | --- |
@@ -70,16 +75,17 @@ curl -s -XPUT $CP/tenants/acme/agents/support-bot -H "$A" -H "$J" \
 curl -s -XPUT $CP/tenants/acme/actions -H "$A" -H "$J" \
   -d '{"action":"crm.read","resource_pattern":"*","base_risk_score":30}'
 curl -s -XPUT $CP/tenants/acme/modifiers -H "$A" -H "$J" -d '{"kind":"classification","value":"PII","delta":20}'
+curl -s -XPATCH $CP/tenants/acme/api-keys/$KEY_ID -H "$A" -H "$J" -d '{"rate_limit_per_minute":120}'  # null = default, 0 = unlimited
 curl -s -XDELETE $CP/tenants/acme/api-keys/$KEY_ID -H "$A"              # revoke
 curl -s -XPATCH $CP/tenants/acme -H "$A" -H "$J" -d '{"status":"suspended"}'  # every key stops working
 ```
 
-**Registry.** Register a guardrail version with its manifest and, optionally, its conformance report:
+**Registry.** Register a guardrail version with its manifest (`manifest` as JSON, or the
+`guardrail.yaml` text as `manifest_yaml`) and, optionally, its conformance report:
 
 ```bash
-curl -s -XPOST $CP/guardrails/versions -H "$A" -H "$J" -d @- <<EOF
-{"manifest": $(python -c 'import yaml,json,sys;print(json.dumps(yaml.safe_load(open(sys.argv[1]))))' guardrail.yaml)}
-EOF
+python -c 'import json,sys;print(json.dumps({"manifest_yaml": open("guardrail.yaml").read()}))' \
+  | curl -s -XPOST $CP/guardrails/versions -H "$A" -H "$J" -d @-
 curl -s -XPOST $CP/guardrails/prompt-injection/versions/0.9.0/deprecate -H "$A"
 ```
 
@@ -121,7 +127,12 @@ curl -s -XPOST $CP/environments/production/rollback -H "$A" -H "$J" -d '{"versio
 ```
 
 **Simulate** runs a request through the working set (`source: "working"`) or the live snapshot
-(`"current"`) on a gateway, without auditing it. It needs `GATEWAY_URL` on the control plane.
+(`"current"`) on a real gateway, without enforcing or auditing it. The control plane sends it to
+that environment's gateway from `GATEWAY_URLS` (`{"staging": "http://gw-staging:8100"}`), falling
+back to `GATEWAY_URL`. A gateway can simulate any environment: scores and the OPA input use the
+target environment, while plugins use that gateway's endpoints. The result says `simulated_on`,
+with a warning when they differ. If the gateway can't compile the draft (for example, a guardrail
+version it doesn't have), you get 422 with the gateway's reason.
 
 ```bash
 curl -s -XPOST $CP/simulate -H "$A" -H "$J" -d '{"environment":"staging","source":"working","tenant_id":"acme",
@@ -133,7 +144,10 @@ curl -s -XPOST $CP/simulate -H "$A" -H "$J" -d '{"environment":"staging","source
 ```bash
 curl -s $CP/environments/production/gateways -H "$A"    # heartbeats, versions, `live` flag
 curl -s "$CP/changes?entity=snapshot&limit=20" -H "$A"   # append-only change log
-curl -s "$CP/analytics/guardrails" -H "$A"               # decisions per guardrail (needs AUDIT_DSN)
+curl -s "$CP/analytics/guardrails?environment=production&hours=24" -H "$A"   # needs AUDIT_DSN
+# -> summary (requests, by_decision, policy_denied, block_rate), totals per stage/decision with avg and
+#    p95 latency, rows per guardrail/version/mode, and an hourly (daily past 72 h) time series.
+#    environment and tenant_id are optional filters; tenant keys only see their tenant.
 ```
 
 ## Human review (ESCALATE)
@@ -151,7 +165,8 @@ curl -s -XPOST $CP/reviews/$ID/approve -H "$A" -H "$J" -d '{"note":"ok"}'
 
 Approved: the gateway releases the held payload. Rejected or not decided within
 `REVIEW_TTL_MINUTES` (15): BLOCK. If the review queue cannot be reached, the gateway returns BLOCK
-(fail-closed). The review **UI** is phase 5. Until then, use the endpoints above.
+(fail-closed). Reviewers work in the console's **Review queue**. Every detail view and decision is
+recorded in the change log; opening the raw payload also records the reviewer on the review.
 
 ## Migrating an existing gateway
 
@@ -179,8 +194,15 @@ not overwrite API edits.
 | `TWO_PERSON_ENVIRONMENTS` | `["production"]` | Environments that need approval |
 | `PUBLISH_REQUEST_TTL_HOURS` / `REVIEW_TTL_MINUTES` | 24 / 15 | Expiry |
 | `GATEWAY_STALE_SECONDS` | 300 | A gateway without a heartbeat for this long is not `live` |
-| `GATEWAY_URL` | unset | Needed for `/simulate` |
+| `GATEWAY_URL` / `GATEWAY_URLS` | unset | Gateways for `/simulate`: default, and per environment (JSON map) |
 | `AUDIT_DSN` | unset | Read-only audit access for `/analytics/guardrails` |
+| `CONSOLE_DIR` | `/app/console` | Built console; served at `/console` (and `/review`) when present |
+| `PORT` / `INTERNAL_PORT` | 8200 / unset | With `INTERNAL_PORT`, `/cp/v1/internal/*` is only served there |
+| `TLS_CERT_FILE`, `TLS_KEY_FILE`, `TLS_CLIENT_CA_FILE`, `TLS_CA_FILE`, `TLS_CLIENT_CERT_FILE`, `TLS_CLIENT_KEY_FILE` | unset | mTLS without a mesh (see [deployment.md](deployment.md#mtls-between-services)) |
+
+Metrics are on `GET /metrics`: pending reviews and the oldest one's age, expired-undecided
+reviews, pending publish requests, gateways live, stale and behind per environment, snapshots
+published, and review decisions.
 
 `control.change_log`, `control.snapshots` and `control.catalog_versions` are append-only: a
 database trigger rejects UPDATE and DELETE.

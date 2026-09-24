@@ -104,3 +104,51 @@ async def test_retention_drops_only_old_partitions(sm):
         await s.commit()
         remaining = (await s.execute(text("SELECT to_regclass('audit.audit_events_2000_01')"))).scalar()
     assert dropped >= 1 and remaining is None
+
+
+async def test_audit_survives_a_database_outage_via_the_spool(sm, tmp_path):
+    """Events that can't be written go to disk and are replayed once Postgres is back (no loss, no dupes)."""
+    from app.audit.spool import AuditSpool
+
+    def event(n):
+        return {
+            "tenant_id": "it-tenant",
+            "request_id": f"it-spool-{n}",
+            "trace_id": "c" * 32,
+            "stage": "input",
+            "environment": "dev",
+            "agent_id": "bot",
+            "user_id": None,
+            "session_id": None,
+            "action": "llm.chat",
+            "resource": None,
+            "decision": "allow",
+            "reason": "ok",
+            "risk_score": 10,
+            "trust_score": 75,
+            "policy_allow": True,
+            "policy_reason": "allowed",
+            "guardrail_results": [{"guardrail_id": "g", "latency_ms": 1.0, "error": None}],
+            "payload_sha256": "0" * 64,
+            "snapshot_version": "v1",
+            "latency_ms": 3.0,
+            "usage_bytes": 10,
+        }
+
+    spool = AuditSpool(tmp_path)
+    down_engine = make_engine("postgresql+asyncpg://nobody:wrong@127.0.0.1:1/none")
+    down = AuditWriter(make_sessionmaker(down_engine), flush_seconds=0.01, spool=spool, maintenance=False)
+    for n in range(3):
+        down.submit(event(n))
+    await down.stop()  # drain fails: the events go to the spool instead of being dropped
+    await down_engine.dispose()
+    assert spool.files()
+
+    up = AuditWriter(sm, spool=spool, maintenance=False)
+    assert await up.replay_spool() == 3 and spool.files() == []
+    assert await up.replay_spool() == 0  # nothing left; replaying twice never duplicates
+    async with sm() as s:
+        n = (
+            await s.execute(text("SELECT count(*) FROM audit.audit_events WHERE request_id LIKE 'it-spool-%'"))
+        ).scalar()
+    assert n == 3

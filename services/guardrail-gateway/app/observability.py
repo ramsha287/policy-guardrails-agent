@@ -13,7 +13,7 @@ from contextlib import contextmanager
 from datetime import UTC, datetime
 from typing import Any
 
-from prometheus_client import Counter, Histogram
+from prometheus_client import Counter, Gauge, Histogram
 
 from app.gateway.middleware import request_id_var, trace_id_var
 
@@ -37,8 +37,15 @@ GUARDRAIL_LATENCY = Histogram(
 )
 GUARDRAIL_ERRORS = Counter("guardrail_errors_total", "Guardrail errors and timeouts", ["id", "stage", "kind"])
 OPA_DENY = Counter("opa_deny_total", "Requests denied by OPA", ["stage"])
+PROXY_REQUESTS = Counter("guardrail_proxy_requests_total", "Proxy-mode chat completions", ["status", "outcome"])
+RATE_LIMITED = Counter("guardrail_rate_limited_total", "Requests refused by the per-key rate limit", ["tenant_id"])
 AUDIT_DROPPED = Counter("audit_events_dropped_total", "Audit events dropped because the queue was full")
 AUDIT_WRITTEN = Counter("audit_events_written_total", "Audit events written")
+AUDIT_SPOOLED = Counter("audit_events_spooled_total", "Audit events written to the disk spool instead of Postgres")
+CONTROL_PLANE_REACHABLE = Gauge("guardrail_control_plane_reachable", "1 if the last control-plane fetch answered")
+CONFIG_LAST_SYNC = Gauge("guardrail_config_last_sync_timestamp_seconds", "Last time the control plane answered a fetch")
+SNAPSHOT_LOADED = Gauge("guardrail_snapshot_loaded", "1 while a guardrail snapshot is loaded (0 = refusing traffic)")
+AUDIT_SPOOL_BYTES = Gauge("audit_spool_bytes", "Bytes of audit events waiting in the disk spool")
 
 
 @contextmanager
