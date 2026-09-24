@@ -21,10 +21,10 @@ The gateway runs with `CONFIG_SOURCE=control_plane`. On the first run the contro
 the seeded tenant and `config/snapshots/*.json`, and after that the control plane is the source of
 truth: change guardrails, keys and scores in the console or its API, not in the snapshot files.
 
-With the dev snapshot, an email and employee ID on input come back redacted (`modify`), and a US
-SSN is blocked. On the retrieval stage, chunks with an SSN or card number are dropped. On the
+With the dev snapshot, the AI Gateway guardrail (`ai-gateway-pii`) redacts an email and employee
+ID on input (`modify`) and blocks a US SSN. On the retrieval stage, chunks with an SSN or card number are dropped. On the
 tool stage, PII sent to `http.*`, `email.*`, `slack.*` or `webhook.*` tools is blocked, and PII in
-tool results is redacted.
+tool results is redacted. Every guardrail and its settings: [guardrails.md](guardrails.md).
 
 ## API
 
@@ -110,7 +110,7 @@ cd services/ai-gateway/instant-redaction-service && pip install -r requirements-
 packages/guardrail-sdk/           contracts, Guardrail base class, manifest, conformance + evaluation, agent client and hooks
   guardrail_sdk/integrations/     guard_tool, LangGraph nodes/retriever, CrewAI tool/inputs/output
 services/guardrail-gateway/       :8100  gateway + context builder + OPA client + engine + audit
-  app/plugins/ai_gateway_pii/     first guardrail: 1.0.0 (input/output), 1.1.0 (all four stages)
+  app/plugins/ai_gateway_pii/     AI Gateway PII guardrail: 1.0.0 (input/output), 1.1.0 (all four stages)
   app/plugins/noop/               reference local guardrail / template
   config/snapshots/<env>.json     which guardrails run where with CONFIG_SOURCE=file (seed for the control plane)
   alembic/                        guardrail + audit schemas (own version table in `guardrail`)
@@ -118,11 +118,11 @@ services/guardrail-control-plane/ :8200  registry, snapshots, catalog, review qu
 apps/console/                     operator console + human review UI (React, TypeScript, Vite); mock control plane + Playwright smoke test
 deploy/helm/guardrail-platform/   k3s/Kubernetes chart (values-k3s.yaml, values-cloud.yaml), alerts, Grafana dashboard
 deploy/secrets/                   SOPS + age setup and the Secret template
-services/ai-gateway/              existing PII redaction platform (project-service :8000, instant-redaction :8001)
+services/ai-gateway/              the AI Gateway: existing PII redaction platform (project-service :8000, instant-redaction :8001)
 policies/guardrails/              Rego authorization policy + tests
 examples/sample_agent/            framework-free agent using all four stages
 eval/                             labelled PII dataset (880 cases) + generator + eval config
 tests/e2e/                        sample agent against a fake gateway and the live stack
-docs/                             agent integration, adding guardrails, control plane, deployment, runbooks, security
+docs/                             guardrail catalog, agent integration, adding guardrails, control plane, deployment, runbooks, security
 ```
 

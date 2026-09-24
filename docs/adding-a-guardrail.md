@@ -1,8 +1,9 @@
 # Adding a guardrail
 
 A new guardrail is a plugin plus a snapshot entry. You don't change the engine, the gateway
-or OPA. `ai-gateway-pii` (remote adapter) and `noop` (local) in
-`services/guardrail-gateway/app/plugins/` are working examples.
+or OPA. `ai-gateway-pii` (the remote adapter to the AI Gateway) and `noop` (local) in
+`services/guardrail-gateway/app/plugins/` are working examples. [guardrails.md](guardrails.md)
+lists what exists today and the guardrails that are still to be built.
 
 ## 1. Pick a kind
 
