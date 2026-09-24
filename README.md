@@ -6,7 +6,7 @@ whether that's OK. The gateway checks the request against your policies, runs th
 chose for that step, and answers **allow**, **modify**, **block** or **escalate** (send it to a
 person to decide). Every decision is logged.
 
-It's built from scratch (no NeMo), runs on k3s or any Kubernetes cluster, and any kind of
+It's built from scratch, runs on k3s or any Kubernetes cluster, and any kind of
 guardrail (PII, prompt injection, toxicity, secrets, …) plugs in without changing the core.
 
 ```text
