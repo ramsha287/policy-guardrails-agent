@@ -8,6 +8,8 @@ at each stage, and for which tenants and agents.
 This page lists every guardrail, explains how they all work, and describes the one in production
 use today: **`ai-gateway-pii`, backed by the AI Gateway**.
 
+![Architecture: the Guardrail Gateway runs guardrail plugins after the policy check; ai-gateway-pii (available now) calls the AI Gateway, and future plugins plug in beside it.](images/architecture.png)
+
 ## At a glance
 
 | Guardrail | What it checks | Stages | Status |
