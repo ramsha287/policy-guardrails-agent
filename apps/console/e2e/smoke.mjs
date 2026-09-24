@@ -210,15 +210,17 @@ async function main() {
       check(!nav.includes("Publish approvals") && !nav.includes("Admin keys") && !nav.includes("Activity log"), "tenant key has no platform screens");
       await visit(tenantPage, "/reviews", "Review queue");
       await tenantPage.getByRole("tab", { name: "All" }).click();
-      await tenantPage.waitForLoadState("networkidle");
-      const tenantsShown = await tenantPage
-        .locator("tbody tr td:nth-child(3) .cell-sub")
-        .allInnerTexts();
-
+      // networkidle resolves at once when the page is already idle, so wait for the "All" list to render.
+      const tenantCells = tenantPage.locator("tbody tr td:nth-child(3) .cell-sub");
+      await eventually(
+        async () =>
+          (await tenantPage.getByRole("tab", { name: "All" }).getAttribute("aria-selected")) === "true" &&
+          (await tenantCells.count()) > 0,
+      );
+      const tenantsShown = await tenantCells.allInnerTexts();
       check(
-        tenantsShown.length > 0 &&
-        tenantsShown.every((t) => t.trim() === "acme"),
-        "tenant reviewer only sees its own tenant"
+        tenantsShown.length > 0 && tenantsShown.every((t) => t.trim() === "acme"),
+        `tenant reviewer only sees its own tenant (${tenantsShown.join(", ") || "no rows"})`,
       );
       await tenantPage.locator("tbody tr").first().click();
       await tenantPage.getByRole("button", { name: "Show raw payload" }).click();
