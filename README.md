@@ -9,11 +9,9 @@ person to decide). Every decision is logged.
 It's built from scratch, runs on k3s or any Kubernetes cluster, and any kind of
 guardrail (PII, prompt injection, toxicity, secrets, …) plugs in without changing the core.
 
-```text
-  AI agent ──▶ Gateway ──▶ who is asking? how risky? ──▶ Policy (OPA) ──▶ Guardrails ──▶ decision
-                  │                                                         │
-                  └── audit log (12 months, no raw text)          held requests ──▶ human review
-```
+![Architecture: AI agents call the Guardrail Gateway, which checks the key, scores the request, asks OPA, then runs guardrail plugins; the ai-gateway-pii plugin uses the AI Gateway (Presidio). The control plane configures gateways and serves the web console.](docs/images/architecture.png)
+
+<sub>Editable source: [docs/images/architecture.svg](docs/images/architecture.svg)</sub>
 
 ## Guardrails
 
@@ -79,6 +77,45 @@ curl -s localhost:8100/v1/guard/input -H "X-API-Key: gk_..." -H 'content-type: a
 
 You get `"decision": "modify"` with the email and employee ID redacted by the AI Gateway. Try a
 US SSN and you get `block`. Then open **Analytics** or **Overview** in the console to see the requests you just made.
+
+## The console in a minute
+
+The console (`/console` on the control plane) is where people run the platform. Agents never use
+it. The menu has three groups:
+
+| Group | Screen | What you do there |
+| --- | --- | --- |
+| **Operate**: day-to-day work | **Overview** | See today's traffic, blocks, held requests and gateway health at a glance |
+| | **Review queue** | Approve or reject requests a guardrail held for a person |
+| | **Publish approvals** | Approve a production change that another admin requested |
+| **Configure**: decide what runs | **Pipeline** | Choose which guardrails run in each environment and stage, in shadow or enforce mode, then publish or roll back |
+| | **Simulate** | Send a test request through your draft or the live pipeline and see the decision. Nothing is enforced or logged |
+| | **Guardrails** | See the registered guardrails (such as `ai-gateway-pii`), their versions and which gateways have them |
+| | **Tenants & keys** | Manage tenants, agents (trust score, allowed tools), actions (risk score) and the agents' gateway keys |
+| **Observe**: check it's working | **Gateways** | Check each gateway's last heartbeat, config version and health |
+| | **Analytics** | Decisions over time, by guardrail, stage and mode |
+| | **Activity log** | Who changed what, and when |
+| | **Admin keys** | Give people access to the console, and revoke it |
+
+**Your key decides what you see.** A tenant reviewer only sees the review queue and data for
+their own tenant. Platform admins see everything.
+
+**How a guardrail change goes live:**
+
+1. **Pipeline**: pick the environment and change a guardrail, for example set `ai-gateway-pii` to
+   `enforce`.
+2. **Simulate**: send a test request through the draft to check the result before publishing.
+3. **Review & publish**: see exactly what changes. In dev and staging it goes live at once. In
+   production it becomes a request.
+4. **Publish approvals**: a second admin approves the production request.
+5. **Gateways** pick up the new config within seconds. Watch **Analytics**, and roll back from
+   **Pipeline** if needed.
+
+**How a held request is handled:** a guardrail answers *escalate* → the agent waits → the request
+appears in the **Review queue** with the reason and a redacted preview → a reviewer approves
+(the agent carries on) or rejects (blocked). Anything not decided within 15 minutes is blocked.
+
+More detail, screen by screen: [docs/user-guide.md](docs/user-guide.md).
 
 ## How to use it
 

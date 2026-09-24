@@ -1,0 +1,247 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="1040" viewBox="0 0 1600 1040" font-family="Segoe UI, system-ui, -apple-system, Helvetica, Arial, sans-serif">
+  <defs>
+    <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#475569"/>
+    </marker>
+    <marker id="arrG" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#047857"/>
+    </marker>
+    <style>
+      .box { fill: #ffffff; stroke: #cbd5e1; stroke-width: 1.5; }
+      .panel { fill: #f1f5f9; stroke: #94a3b8; stroke-width: 1.5; }
+      .blue { fill: #eff6ff; stroke: #3b82f6; stroke-width: 1.5; }
+      .green { fill: #ecfdf5; stroke: #059669; stroke-width: 2.5; }
+      .greenIn { fill: #ffffff; stroke: #059669; stroke-width: 1.5; }
+      .dashed { fill: #ffffff; stroke: #94a3b8; stroke-width: 1.5; stroke-dasharray: 6 5; }
+      .t { fill: #0f172a; font-size: 15px; font-weight: 600; }
+      .h { fill: #0f172a; font-size: 18px; font-weight: 700; }
+      .s { fill: #475569; font-size: 12.5px; }
+      .m { fill: #64748b; font-size: 12px; font-style: italic; }
+      .line { stroke: #475569; stroke-width: 1.6; fill: none; }
+      .lineG { stroke: #047857; stroke-width: 2.2; fill: none; }
+      .badge { fill: #059669; }
+      .badgeT { fill: #ffffff; font-size: 11px; font-weight: 700; letter-spacing: 0.5px; }
+    </style>
+  </defs>
+
+  <rect width="1600" height="1040" fill="#ffffff"/>
+
+  <!-- Title -->
+  <text x="40" y="52" font-size="26" font-weight="700" fill="#0f172a">Guardrail Platform for AI Agents: architecture</text>
+  <text x="40" y="80" font-size="14" fill="#475569">Every agent step is checked by the gateway. The AI Gateway (PII redaction) is the guardrail available today; others plug in the same way.</text>
+
+  <!-- ============ AI agents ============ -->
+  <rect x="40" y="110" width="260" height="500" rx="12" class="panel"/>
+  <text x="60" y="142" class="h">AI agents</text>
+  <text x="60" y="162" class="s">one gateway key (gk_…) per agent</text>
+  <rect x="60" y="182" width="220" height="56" rx="8" class="box"/>
+  <text x="74" y="206" class="t">Python SDK</text>
+  <text x="74" y="225" class="s">GuardHooks, GuardClient</text>
+  <rect x="60" y="250" width="220" height="56" rx="8" class="box"/>
+  <text x="74" y="274" class="t">LangGraph · CrewAI</text>
+  <text x="74" y="293" class="s">ready-made integrations</text>
+  <rect x="60" y="318" width="220" height="56" rx="8" class="box"/>
+  <text x="74" y="342" class="t">Any OpenAI client</text>
+  <text x="74" y="361" class="s">proxy mode, no code changes</text>
+  <text x="60" y="410" class="s">Checks at every step of a run:</text>
+  <text x="60" y="430" class="t" font-size="13.5">input · retrieval · tool · output</text>
+  <text x="60" y="480" class="s">→ POST /v1/guard/{stage}</text>
+  <text x="60" y="560" class="s">← decision and the safe</text>
+  <text x="60" y="578" class="s">    (redacted) payload</text>
+
+  <!-- agent -> gateway, gateway -> agent -->
+  <line x1="300" y1="215" x2="378" y2="215" class="line" marker-end="url(#arr)"/>
+  <line x1="378" y1="537" x2="302" y2="537" class="line" marker-end="url(#arr)"/>
+
+  <!-- ============ Guardrail gateway ============ -->
+  <rect x="360" y="110" width="640" height="500" rx="12" class="blue"/>
+  <text x="380" y="140" class="h">Guardrail Gateway  :8100</text>
+  <text x="380" y="160" class="s">one per environment: dev · staging · production (fails closed in all three)</text>
+
+  <rect x="380" y="180" width="138" height="70" rx="8" class="box"/>
+  <text x="392" y="206" class="t">1 Authenticate</text>
+  <text x="392" y="226" class="s">gateway key,</text>
+  <text x="392" y="242" class="s">rate limit</text>
+  <rect x="534" y="180" width="138" height="70" rx="8" class="box"/>
+  <text x="546" y="206" class="t">2 Build context</text>
+  <text x="546" y="226" class="s">agent trust score,</text>
+  <text x="546" y="242" class="s">action risk score</text>
+  <rect x="688" y="180" width="138" height="70" rx="8" class="box"/>
+  <text x="700" y="206" class="t">3 Policy check</text>
+  <text x="700" y="226" class="s">may it do this</text>
+  <text x="700" y="242" class="s">at all? (OPA)</text>
+  <rect x="842" y="180" width="138" height="70" rx="8" class="box"/>
+  <text x="854" y="206" class="t">4 Guardrails</text>
+  <text x="854" y="226" class="s">is the content</text>
+  <text x="854" y="242" class="s">safe?</text>
+  <line x1="518" y1="215" x2="532" y2="215" class="line" marker-end="url(#arr)"/>
+  <line x1="672" y1="215" x2="686" y2="215" class="line" marker-end="url(#arr)"/>
+  <line x1="826" y1="215" x2="840" y2="215" class="line" marker-end="url(#arr)"/>
+
+  <!-- step 3 -> OPA -->
+  <path d="M757,180 V170 H1030 V200 H1058" class="line" marker-end="url(#arr)"/>
+  <!-- step 4 -> plugins -->
+  <line x1="911" y1="250" x2="911" y2="288" class="line" marker-end="url(#arr)"/>
+
+  <!-- plugins -->
+  <rect x="380" y="290" width="600" height="190" rx="10" class="box"/>
+  <text x="396" y="316" class="t">Guardrail plugins</text>
+  <text x="396" y="336" class="s">run in order · strictest wins: block › escalate › modify › allow · each in shadow or enforce mode</text>
+
+  <rect x="396" y="352" width="176" height="112" rx="8" class="dashed"/>
+  <text x="410" y="378" class="t">Future plugins</text>
+  <text x="410" y="398" class="s">prompt injection,</text>
+  <text x="410" y="415" class="s">toxicity, secrets,</text>
+  <text x="410" y="432" class="s">topic limits, grounding</text>
+  <text x="410" y="452" class="m">not built yet</text>
+
+  <rect x="588" y="352" width="156" height="112" rx="8" class="box"/>
+  <text x="602" y="378" class="t">noop</text>
+  <text x="602" y="398" class="s">local plugin</text>
+  <text x="602" y="415" class="s">template and</text>
+  <text x="602" y="432" class="s">engine smoke test</text>
+
+  <rect x="760" y="352" width="204" height="112" rx="8" class="green"/>
+  <rect x="774" y="362" width="112" height="20" rx="10" class="badge"/>
+  <text x="784" y="376" class="badgeT">AVAILABLE NOW</text>
+  <text x="774" y="402" class="t">ai-gateway-pii 1.1.0</text>
+  <text x="774" y="421" class="s">remote plugin: finds and</text>
+  <text x="774" y="437" class="s">redacts personal data</text>
+  <text x="774" y="453" class="s">on all four stages</text>
+
+  <!-- decisions -->
+  <line x1="680" y1="480" x2="680" y2="508" class="line" marker-end="url(#arr)"/>
+  <text x="380" y="530" class="t" font-size="13">Decision</text>
+  <rect x="380" y="540" width="84" height="30" rx="15" fill="#dcfce7" stroke="#16a34a"/>
+  <text x="422" y="560" text-anchor="middle" font-size="13" font-weight="600" fill="#166534">allow</text>
+  <rect x="472" y="540" width="84" height="30" rx="15" fill="#dbeafe" stroke="#2563eb"/>
+  <text x="514" y="560" text-anchor="middle" font-size="13" font-weight="600" fill="#1e40af">modify</text>
+  <rect x="564" y="540" width="84" height="30" rx="15" fill="#fee2e2" stroke="#dc2626"/>
+  <text x="606" y="560" text-anchor="middle" font-size="13" font-weight="600" fill="#991b1b">block</text>
+  <rect x="656" y="540" width="96" height="30" rx="15" fill="#fef3c7" stroke="#d97706"/>
+  <text x="704" y="560" text-anchor="middle" font-size="13" font-weight="600" fill="#92400e">escalate</text>
+
+  <rect x="780" y="512" width="200" height="72" rx="8" class="box"/>
+  <text x="794" y="536" class="t">Audit + metrics</text>
+  <text x="794" y="555" class="s">every decision logged; hash</text>
+  <text x="794" y="572" class="s">of the payload, never raw text</text>
+
+  <!-- ============ OPA ============ -->
+  <rect x="1060" y="150" width="500" height="100" rx="12" class="panel"/>
+  <text x="1080" y="180" class="h">Open Policy Agent  :8181</text>
+  <text x="1080" y="202" class="s">Rego rules: trust and risk limits in production, allowed tools per agent,</text>
+  <text x="1080" y="220" class="s">delegation depth, and which guardrails must run (PII data → ai-gateway-pii)</text>
+
+  <!-- ============ AI Gateway ============ -->
+  <line x1="964" y1="408" x2="1058" y2="408" class="lineG" marker-end="url(#arrG)"/>
+  <text x="1011" y="398" text-anchor="middle" font-size="11.5" fill="#047857" font-weight="600">HTTP</text>
+
+  <rect x="1060" y="280" width="500" height="220" rx="12" class="green"/>
+  <text x="1080" y="312" class="h">AI Gateway</text>
+  <rect x="1188" y="296" width="112" height="20" rx="10" class="badge"/>
+  <text x="1198" y="310" class="badgeT">AVAILABLE NOW</text>
+  <text x="1080" y="334" class="s">the existing AI Security Gateway, used as the PII guardrail</text>
+
+  <rect x="1080" y="350" width="220" height="130" rx="8" class="greenIn"/>
+  <text x="1094" y="376" class="t">instant-redaction  :8001</text>
+  <text x="1094" y="398" class="s">Microsoft Presidio + spaCy</text>
+  <text x="1094" y="416" class="s">text, chunk batches, tool JSON</text>
+  <text x="1094" y="434" class="s">also images, PDF, CSV</text>
+  <text x="1094" y="460" class="s">returns types + offsets only</text>
+
+  <rect x="1320" y="350" width="220" height="130" rx="8" class="greenIn"/>
+  <text x="1334" y="376" class="t">project-service  :8000</text>
+  <text x="1334" y="398" class="s">entities to detect per project</text>
+  <text x="1334" y="416" class="s">custom regex patterns</text>
+  <text x="1334" y="434" class="s">replace · mask · hash</text>
+  <line x1="1318" y1="415" x2="1302" y2="415" class="lineG" marker-end="url(#arrG)"/>
+
+  <!-- ============ Control plane ============ -->
+  <line x1="520" y1="678" x2="520" y2="612" class="line" marker-end="url(#arr)"/>
+  <text x="530" y="642" class="s">guardrail config snapshots,</text>
+  <text x="530" y="658" class="s">catalog (change events via Redis)</text>
+  <line x1="880" y1="612" x2="880" y2="678" class="line" marker-end="url(#arr)"/>
+  <text x="772" y="642" class="s">escalations,</text>
+  <text x="772" y="658" class="s">heartbeats</text>
+
+  <rect x="360" y="680" width="640" height="230" rx="12" class="blue"/>
+  <text x="380" y="710" class="h">Control plane  :8200</text>
+  <text x="560" y="710" class="s">one for all environments; serves the console</text>
+
+  <rect x="380" y="728" width="196" height="76" rx="8" class="box"/>
+  <text x="394" y="754" class="t">Guardrail registry</text>
+  <text x="394" y="774" class="s">versions and manifests</text>
+  <rect x="588" y="728" width="196" height="76" rx="8" class="box"/>
+  <text x="602" y="754" class="t">Pipelines</text>
+  <text x="602" y="774" class="s">per environment: publish,</text>
+  <text x="602" y="791" class="s">shadow → enforce, rollback</text>
+  <rect x="796" y="728" width="184" height="76" rx="8" class="box"/>
+  <text x="810" y="754" class="t">Publish approvals</text>
+  <text x="810" y="774" class="s">second admin needed</text>
+  <text x="810" y="791" class="s">for production</text>
+  <rect x="380" y="816" width="196" height="76" rx="8" class="box"/>
+  <text x="394" y="842" class="t">Tenants, agents, keys</text>
+  <text x="394" y="862" class="s">trust and risk catalog</text>
+  <rect x="588" y="816" width="196" height="76" rx="8" class="box"/>
+  <text x="602" y="842" class="t">Review queue</text>
+  <text x="602" y="862" class="s">held requests, decided</text>
+  <text x="602" y="879" class="s">by a person within 15 min</text>
+  <rect x="796" y="816" width="184" height="76" rx="8" class="box"/>
+  <text x="810" y="842" class="t">Access and history</text>
+  <text x="810" y="862" class="s">admin keys, roles,</text>
+  <text x="810" y="879" class="s">analytics, activity log</text>
+
+  <!-- ============ Console ============ -->
+  <rect x="40" y="680" width="260" height="230" rx="12" class="panel"/>
+  <text x="60" y="712" class="h">Web console</text>
+  <text x="60" y="734" class="s">React + TypeScript, at /console</text>
+  <rect x="60" y="752" width="220" height="140" rx="8" class="box"/>
+  <text x="74" y="778" class="t">People, with admin keys</text>
+  <text x="74" y="800" class="s">platform admins and approvers</text>
+  <text x="74" y="820" class="s">tenant reviewers</text>
+  <text x="74" y="840" class="s">editors and viewers</text>
+  <text x="74" y="872" class="m">each sees only what its roles allow</text>
+  <line x1="300" y1="795" x2="358" y2="795" class="line" marker-end="url(#arr)"/>
+
+  <!-- ============ Data + observability ============ -->
+  <rect x="1060" y="560" width="240" height="160" rx="12" class="panel"/>
+  <text x="1080" y="590" class="h">PostgreSQL 16</text>
+  <text x="1080" y="614" class="s">gateway and control-plane</text>
+  <text x="1080" y="631" class="s">configuration, review queue</text>
+  <text x="1080" y="655" class="s">audit log: 12 months,</text>
+  <text x="1080" y="672" class="s">append-only, no raw text</text>
+  <text x="1080" y="696" class="s">AI Gateway projects</text>
+
+  <rect x="1320" y="560" width="240" height="160" rx="12" class="panel"/>
+  <text x="1340" y="590" class="h">Redis 7</text>
+  <text x="1340" y="614" class="s">pushes config changes to</text>
+  <text x="1340" y="631" class="s">gateways within seconds</text>
+  <text x="1340" y="655" class="s">AI Gateway project cache</text>
+
+  <rect x="1060" y="760" width="500" height="150" rx="12" class="panel"/>
+  <text x="1080" y="790" class="h">Observability</text>
+  <text x="1080" y="814" class="s">Prometheus metrics and alert rules · Grafana dashboard</text>
+  <text x="1080" y="834" class="s">OpenTelemetry traces across gateway and AI Gateway</text>
+  <text x="1080" y="858" class="s">decisions by guardrail, stage and mode (enforce vs shadow)</text>
+  <text x="1080" y="882" class="s">latency, errors, block rate, review queue depth</text>
+
+  <!-- data links -->
+  <path d="M1000,560 H1030 V600 H1058" class="line" marker-end="url(#arr)"/>
+  <path d="M1000,850 H1030 V700 H1058" class="line" marker-end="url(#arr)"/>
+  <line x1="1190" y1="500" x2="1190" y2="558" class="lineG" marker-end="url(#arrG)"/>
+  <line x1="1430" y1="500" x2="1430" y2="558" class="lineG" marker-end="url(#arrG)"/>
+
+  <!-- ============ Footer ============ -->
+  <rect x="40" y="940" width="1520" height="74" rx="12" fill="#f8fafc" stroke="#e2e8f0"/>
+  <text x="60" y="970" class="t">Runs on</text>
+  <text x="130" y="970" class="s">Docker Compose locally · k3s or any Kubernetes via Helm · amd64 + arm64 images · mTLS between services (cert-manager) · secrets with SOPS + age</text>
+  <text x="60" y="996" class="t">Key</text>
+  <rect x="100" y="984" width="34" height="16" rx="4" class="green"/>
+  <text x="142" y="997" class="s">available now (AI Gateway)</text>
+  <rect x="330" y="984" width="34" height="16" rx="4" class="dashed"/>
+  <text x="372" y="997" class="s">not built yet</text>
+  <rect x="480" y="984" width="34" height="16" rx="4" class="blue"/>
+  <text x="522" y="997" class="s">platform services (Python, FastAPI)</text>
+  <rect x="770" y="984" width="34" height="16" rx="4" class="panel"/>
+  <text x="812" y="997" class="s">clients, policy and infrastructure</text>
+</svg>
