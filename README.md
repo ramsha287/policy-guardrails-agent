@@ -2,12 +2,12 @@
 
 **A safety checkpoint between your AI agents and the world.** Before an agent sends a prompt,
 uses retrieved documents, calls a tool or returns an answer, it asks the guardrail gateway
-whether that's OK. The gateway checks the request against your policies, removes personal data,
-and answers **allow**, **modify**, **block** or **escalate** (send it to a person to decide).
-Every decision is logged.
+whether that's OK. The gateway checks the request against your policies, runs the guardrails you
+chose for that step, and answers **allow**, **modify**, **block** or **escalate** (send it to a
+person to decide). Every decision is logged.
 
-It's built from scratch (no NeMo), runs on k3s or any Kubernetes cluster, and new guardrails
-plug in without changing the core.
+It's built from scratch (no NeMo), runs on k3s or any Kubernetes cluster, and any kind of
+guardrail (PII, prompt injection, toxicity, secrets, …) plugs in without changing the core.
 
 ```text
   AI agent ──▶ Gateway ──▶ who is asking? how risky? ──▶ Policy (OPA) ──▶ Guardrails ──▶ decision
@@ -15,10 +15,29 @@ plug in without changing the core.
                   └── audit log (12 months, no raw text)          held requests ──▶ human review
 ```
 
+## Guardrails
+
+> **Available now: the AI Gateway.** The platform ships with `ai-gateway-pii`, which connects
+> every agent to the existing **AI Gateway** (`services/ai-gateway`, Presidio). It finds personal
+> data in prompts, retrieved documents, tool calls and answers, redacts it, and blocks the
+> riskiest cases, such as SSNs, card numbers, or PII sent to external tools.
+
+| Guardrail | What it checks | Status |
+| --- | --- | --- |
+| **`ai-gateway-pii`**, via the **AI Gateway** | Personal data: emails, names, phone numbers, SSNs, card numbers, national IDs, your own patterns | **Available now.** On by default on input, retrieval, tool and output |
+| Policy checks (OPA) | Trust and risk scores, allowed tools, delegation depth, required guardrails | **Available now.** Always on |
+| Prompt injection, toxicity, secrets, topic limits, grounding, … | Other kinds of content | **Not built yet.** Add them as plugins ([how](docs/adding-a-guardrail.md)) |
+
+The full catalog, with what the AI Gateway detects, its settings and how every guardrail
+behaves, is in **[docs/guardrails.md](docs/guardrails.md)**.
+
 ## What you get
 
-- **PII protection out of the box.** The first guardrail (`ai-gateway-pii`, based on Presidio)
-  redacts emails, IDs and the like, and blocks things like SSNs and card numbers.
+- **PII protection out of the box, through the AI Gateway.** Emails, names, IDs and the like are
+  redacted, and SSNs and card numbers are blocked. The privacy team manages the entity list and
+  custom patterns in one place, the AI Gateway project.
+- **Room for every other guardrail.** Local rules, remote services and ML models all use the same
+  plugin interface, conformance tests and shadow-then-enforce rollout.
 - **Four checkpoints per agent run:** input, retrieval, tool calls and output.
 - **Scores for agents and actions.** Each agent has a trust score and each action has a risk
   score, and policies use both (for example "no risky actions in production for low-trust
@@ -58,13 +77,14 @@ curl -s localhost:8100/v1/guard/input -H "X-API-Key: gk_..." -H 'content-type: a
 }'
 ```
 
-You get `"decision": "modify"` with the email and employee ID redacted. Try a US SSN and you get
-`block`. Then open **Analytics** or **Overview** in the console to see the requests you just made.
+You get `"decision": "modify"` with the email and employee ID redacted by the AI Gateway. Try a
+US SSN and you get `block`. Then open **Analytics** or **Overview** in the console to see the requests you just made.
 
 ## How to use it
 
 | I want to… | Read |
 | --- | --- |
+| See every guardrail, what the AI Gateway detects, and how to configure it | [Guardrails](docs/guardrails.md) |
 | Use the console: review held requests, change guardrails, simulate | [User guide](docs/user-guide.md) |
 | Put it in production, and give people access (admin keys) | [Production guide](docs/production.md) |
 | Install on k3s / Kubernetes with Helm | [Deployment](docs/deployment.md) |
@@ -120,7 +140,7 @@ Proxy mode is off by default (`PROXY_ENABLED=true` turns it on).
 | `services/guardrail-gateway` | 8100 | Checks every agent request, runs the guardrails and writes the audit log |
 | `services/guardrail-control-plane` | 8200 | Stores config, tenants, keys and the review queue; serves the console at `/console` |
 | `apps/console` | — | The web console (React) |
-| `services/ai-gateway` | 8000/8001 | The existing PII redaction service behind the first guardrail |
+| `services/ai-gateway` | 8000/8001 | **The AI Gateway**: the existing PII redaction service behind `ai-gateway-pii` |
 | `packages/guardrail-sdk` | — | Python SDK for agents and for writing guardrails |
 | `deploy/helm/guardrail-platform` | — | Helm chart for k3s/Kubernetes |
 | `policies/guardrails` | — | OPA (Rego) policies |
@@ -140,7 +160,11 @@ Every suite, including the Postgres ones, is listed in [docs/reference.md](docs/
 
 ## Project status
 
-All five phases of the build plan are done: foundations, gateway and engine, the ai-gateway PII
+All five phases of the build plan are done: foundations, gateway and engine, the AI Gateway PII
 guardrail, retrieval and tool stages, the control plane with human review, and hardening for
 production (console, Helm chart, mTLS, SOPS secrets, rate limits, durable audit, alerts and
 dashboards, proxy mode, multi-arch images).
+
+**Guardrails today:** `ai-gateway-pii` (the AI Gateway) and the OPA policy checks. The next
+guardrails, such as prompt injection, toxicity and secrets, are not built yet. See
+[docs/guardrails.md](docs/guardrails.md#guardrails-you-can-add).
