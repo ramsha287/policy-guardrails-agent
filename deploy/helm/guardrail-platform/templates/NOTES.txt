@@ -6,6 +6,7 @@ Guardrail platform {{ .Chart.AppVersion }} installed as "{{ .Release.Name }}" (g
      kubectl -n {{ .Release.Namespace }} exec deploy/{{ include "gp.name" (dict "root" $ "component" "control-plane") }} -c control-plane -- \
        python -m app.cli create-admin-key --name <you> --roles admin
    Create a second admin for production approvals (two-person rule), and reviewer keys as needed.
+   After that, give people their own keys from the console (Admin keys). See docs/production.md.
 
 2. Open the console:
 {{- if .Values.controlPlane.ingress.enabled }}

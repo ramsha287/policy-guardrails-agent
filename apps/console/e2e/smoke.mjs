@@ -29,8 +29,8 @@ const CHROMIUM = process.env.CHROMIUM_PATH || undefined;
 
 const failures = [];
 const check = (cond, msg) => {
-  if (!cond) failures.push(msg);
-  console.log(`${cond ? "ok  " : "FAIL"} ${msg}`);
+  if (cond) console.log(`ok   ${msg}`);
+  else fail(msg);
 };
 
 async function startMock() {
@@ -45,11 +45,42 @@ async function startMock() {
   return proc;
 }
 
+// Expected API refusals (wrong key, missing item, conflicts, validation) show up as console errors.
+const EXPECTED_HTTP = /status of (401|403|404|409|422)/;
+
+function fail(msg) {
+  failures.push(msg);
+  console.log(`FAIL ${msg}`); // printed straight away, so the log shows which step caused it
+}
+
+function where(page) {
+  try {
+    return new URL(page.url()).hash || page.url();
+  } catch {
+    return page.url();
+  }
+}
+
 function watch(page, label) {
-  page.on("pageerror", (e) => failures.push(`${label}: page error ${e.message}`));
+  page.on("pageerror", (e) => fail(`${label} ${where(page)}: page error ${e.message}`));
   page.on("console", (m) => {
-    if (m.type() === "error" && !/status of (401|403|404|409|422)/.test(m.text())) failures.push(`${label}: console ${m.text()}`);
+    if (m.type() !== "error" || EXPECTED_HTTP.test(m.text())) return;
+    const loc = m.location()?.url ? ` (${m.location().url})` : "";
+    fail(`${label} ${where(page)}: console error ${m.text()}${loc}`);
   });
+  page.on("response", (r) => {
+    if (r.status() >= 500) fail(`${label} ${where(page)}: HTTP ${r.status()} from ${r.request().method()} ${r.url()}`);
+  });
+}
+
+// Poll until `fn` returns true (CI runners are slower than a laptop; fixed sleeps are flaky).
+async function eventually(fn, timeout = 10_000) {
+  const end = Date.now() + timeout;
+  for (;;) {
+    if (await fn()) return true;
+    if (Date.now() > end) return false;
+    await new Promise((r) => setTimeout(r, 100));
+  }
 }
 
 async function shot(page, name) {
@@ -126,8 +157,8 @@ async function main() {
       await shot(page, "flow-review-detail");
       await page.getByRole("button", { name: "Approve" }).click();
       await page.getByText("Approved: the agent can continue.").waitFor();
-      await page.waitForTimeout(300);
-      check((await page.locator("tbody tr").count()) === before - 1, "approved review leaves the pending queue");
+      const left = await eventually(async () => (await page.locator("tbody tr").count()) === before - 1);
+      check(left, `approved review leaves the pending queue (${before} -> ${await page.locator("tbody tr").count()} rows)`);
 
       // ---- pipeline: switch dev to shadow, publish; production needs a second admin
       await visit(page, "/pipeline", "Pipeline");
@@ -180,6 +211,7 @@ async function main() {
       await visit(tenantPage, "/reviews", "Review queue");
       await tenantPage.getByRole("tab", { name: "All" }).click();
       await tenantPage.waitForLoadState("networkidle");
+      await eventually(async () => (await tenantPage.locator("tbody .cell-sub").count()) > 0);
       const tenantsShown = await tenantPage.locator("tbody .cell-sub").allInnerTexts();
       check(tenantsShown.length > 0 && tenantsShown.every((t) => !t.includes("demo")), "tenant reviewer only sees its own tenant");
       await tenantPage.locator("tbody tr").first().click();
