@@ -53,7 +53,9 @@ async def test_flow_on_postgres(flow, migrated, monkeypatch):
 
     monkeypatch.setattr(flows, "make_ctx", pg_ctx)
     try:
-        await getattr(flows, flow)()
+        result = getattr(flows, flow)()
+        if hasattr(result, "__await__"):
+            await result
     finally:
         await engine.dispose()
 

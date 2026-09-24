@@ -180,8 +180,15 @@ async function main() {
       await visit(tenantPage, "/reviews", "Review queue");
       await tenantPage.getByRole("tab", { name: "All" }).click();
       await tenantPage.waitForLoadState("networkidle");
-      const tenantsShown = await tenantPage.locator("tbody .cell-sub").allInnerTexts();
-      check(tenantsShown.length > 0 && tenantsShown.every((t) => !t.includes("demo")), "tenant reviewer only sees its own tenant");
+      const tenantsShown = await tenantPage
+        .locator("tbody tr td:nth-child(3) .cell-sub")
+        .allInnerTexts();
+
+      check(
+        tenantsShown.length > 0 &&
+        tenantsShown.every((t) => t.trim() === "acme"),
+        "tenant reviewer only sees its own tenant"
+      );
       await tenantPage.locator("tbody tr").first().click();
       await tenantPage.getByRole("button", { name: "Show raw payload" }).click();
       await tenantPage.getByRole("button", { name: "Show it" }).click();
