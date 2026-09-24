@@ -68,6 +68,9 @@ Then create admin keys (the NOTES printed by Helm show the exact command). Open 
 publish the first snapshot from the Pipeline page. Gateways register their installed guardrail
 versions on their first heartbeat.
 
+How people get access after that (roles, onboarding, revoking, a lost key) is covered in
+[production.md](production.md#how-access-works).
+
 ## Environments
 
 The control plane manages dev, staging and production. Two common layouts:

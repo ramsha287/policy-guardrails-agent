@@ -53,11 +53,24 @@ export function DecisionChart({
   useLayoutEffect(() => {
     const el = wrap.current;
     if (!el) return;
-    const update = () => setWidth(Math.max(280, el.clientWidth));
-    update();
-    const ro = new ResizeObserver(update);
+    const measure = () => {
+      const next = Math.max(280, Math.round(el.clientWidth));
+      setWidth((prev) => (prev === next ? prev : next));
+    };
+    measure();
+    // Resize in the next frame, not inside the observer callback: resizing the SVG there changes
+    // layout again (a scrollbar can appear), which makes Chromium report "ResizeObserver loop
+    // completed with undelivered notifications" as an uncaught page error.
+    let frame = 0;
+    const ro = new ResizeObserver(() => {
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(measure);
+    });
     ro.observe(el);
-    return () => ro.disconnect();
+    return () => {
+      cancelAnimationFrame(frame);
+      ro.disconnect();
+    };
   }, []);
 
   const buckets = useMemo(() => buildBuckets(series, hours, unit, now), [series, hours, unit, now]);
