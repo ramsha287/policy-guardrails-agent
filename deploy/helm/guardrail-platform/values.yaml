@@ -71,6 +71,12 @@ gateway:
   # Requests per minute per API key across ALL replicas (0 = unlimited); the chart divides it by
   # `replicas`. A key's own limit in the control-plane catalog overrides it.
   rateLimitPerMinute: 0
+  # Contextual decisions (agent-bound keys, action descriptors, session state, risk v2).
+  contextual:
+    riskMode: shadow                # off | shadow (compute + audit only) | enforce
+    requireBoundKeys: false         # true = refuse API keys not bound to one agent (A0)
+    internalDomains: ""             # comma-separated, e.g. "acme.com,acme.internal"
+    riskConfig: {}                  # overrides for RiskConfig weights/limits, e.g. {elevated_row_limit: 500}
   maxBodyBytes: 1048576
   defaultGuardrailTimeoutMs: 800
   audit:

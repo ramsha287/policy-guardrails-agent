@@ -192,6 +192,7 @@ export class Api {
       environments?: Environment[] | null;
       expires_at?: string | null;
       rate_limit_per_minute?: number | null;
+      agent_id?: string | null;
     },
   ) {
     return this.request<CreatedApiKey>("POST", `/tenants/${encodeURIComponent(tenant)}/api-keys`, body);
@@ -201,6 +202,14 @@ export class Api {
       "PATCH",
       `/tenants/${encodeURIComponent(tenant)}/api-keys/${encodeURIComponent(keyId)}`,
       { rate_limit_per_minute: perMinute },
+    );
+  }
+  /** Bind a key to one agent (A1), or null to unbind it (A0). Only agent_id changes. */
+  bindApiKey(tenant: string, keyId: string, agentId: string | null) {
+    return this.request<ApiKey>(
+      "PATCH",
+      `/tenants/${encodeURIComponent(tenant)}/api-keys/${encodeURIComponent(keyId)}`,
+      { agent_id: agentId },
     );
   }
   revokeApiKey(tenant: string, keyId: string) {

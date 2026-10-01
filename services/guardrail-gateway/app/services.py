@@ -16,6 +16,7 @@ from app.gateway.auth import Authenticator
 from app.gateway.proxy import ChatProxy
 from app.gateway.ratelimit import RateLimiter
 from app.policy.opa import PolicyEngine
+from app.risk.contextual import ContextualDecisions
 
 
 class SnapshotSource(Protocol):
@@ -45,3 +46,6 @@ class Services:
     limiter: RateLimiter | None = None
     # PROXY_ENABLED: OpenAI-compatible chat completions with guardrails applied
     proxy: ChatProxy | None = None
+    # Agent-bound keys, action descriptors, session state, risk v2 and the decision table.
+    # None (tests, old wiring) = phase-5 behaviour without identity binding checks.
+    contextual: ContextualDecisions | None = None

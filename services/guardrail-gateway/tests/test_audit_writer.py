@@ -75,3 +75,28 @@ async def test_shutdown_in_the_middle_of_a_batch_keeps_it(tmp_path):
     await asyncio.wait_for(SlowSession.started.wait(), 5)
     await w.stop()  # cancels the stuck write; the in-flight batch must not vanish
     assert spooled(spool) == ["r1", "r2"]
+
+
+class RecordingSession(DownSession):
+    batches: list = []
+
+    async def execute(self, stmt, batch=None, **k):
+        RecordingSession.batches.append(batch)
+
+
+async def test_events_are_chained_in_submit_order_and_completed_for_the_insert(tmp_path):
+    from app.audit.chain import AuditChain, verify
+
+    RecordingSession.batches = []
+    w = AuditWriter(lambda: RecordingSession(), flush_seconds=0.01, maintenance=False, chain=AuditChain("c"))
+    await w.start()
+    for n in range(3):
+        w.submit(ev(n))
+    w.submit({"tenant_id": "t", "request_id": "x", "outcome": "allow"})
+    await asyncio.sleep(0.2)
+    await w.stop()
+    rows = [e for b in RecordingSession.batches for e in b]
+    assert [e["chain_seq"] for e in rows] == [1, 2, 3, 4]
+    assert verify(rows).ok
+    # every row carries every v2 column (NULL when unset), so one INSERT fits the whole batch
+    assert all(set(r) >= {"descriptor", "risk", "reason_codes", "record_hash"} for r in rows)

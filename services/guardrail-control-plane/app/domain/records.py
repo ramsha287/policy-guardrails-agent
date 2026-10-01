@@ -45,6 +45,8 @@ class ApiKeyRecord(Record):
     created_at: datetime = Field(default_factory=utcnow)
     revoked_at: datetime | None = None
     rate_limit_per_minute: int | None = Field(default=None, ge=0)  # None = gateway default, 0 = unlimited
+    # The only agent this key may act as (identity assurance A1). None = any claimed agent_id (A0).
+    agent_id: str | None = Field(default=None, max_length=128)
 
 
 class AgentRecord(Record):
@@ -176,6 +178,8 @@ class GatewayRecord(Record):
     last_error: str | None = None
     installed: list[str] = Field(default_factory=list)  # "id@version"
     last_seen: datetime = Field(default_factory=utcnow)
+    # Features the gateway reported (empty for gateways older than 0.6, which report none).
+    capabilities: list[str] = Field(default_factory=list)
 
 
 class ChangeRecord(Record):

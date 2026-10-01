@@ -19,6 +19,10 @@ helm upgrade --install guardrails deploy/helm/guardrail-platform -n guardrails -
 | `postgresql.enabled` / `redis.enabled` | `true` | In-chart single instances; `false` = external (DSNs and `REDIS_URL` in the Secret) |
 | `gateway.replicas`, `gateway.autoscaling.*` | 2, off | Gateway scale |
 | `gateway.rateLimitPerMinute` | `0` | Per API key across all replicas (divided by `replicas`); catalog per-key overrides win |
+| `gateway.contextual.riskMode` | `shadow` | `off`, `shadow` (compute and audit only) or `enforce` ([contextual decisions](../../../docs/contextual-decisions.md)) |
+| `gateway.contextual.requireBoundKeys` | `false` | Refuse gateway keys not bound to one agent |
+| `gateway.contextual.internalDomains` | `""` | Comma-separated internal domains for destination checks |
+| `gateway.contextual.riskConfig` | `{}` | Risk weight/limit overrides (`RISK_CONFIG_JSON`) |
 | `gateway.proxy.*` | off | OpenAI-compatible `/v1/chat/completions` with the guardrails applied |
 | `gateway.configSource` | `control_plane` | Or `file` with `gateway.snapshot` |
 | `controlPlane.enabled` | `true` | `false` for gateway-only releases (other environments) |

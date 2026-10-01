@@ -14,6 +14,7 @@ from pydantic import BaseModel, ValidationError
 
 from app.context.builder import ContextBuilder
 from app.context.catalog import CachedCatalog
+from app.context.descriptors import describe
 from app.engine.pipeline import GuardrailEngine, StageOutcome
 from app.engine.remote import CatalogHolder
 from app.engine.snapshot import parse_snapshot
@@ -68,7 +69,20 @@ async def simulate(svc: Services, body: SimulateIn) -> dict[str, Any]:
             principal=principal, req=body.request, request_id="simulation", trace_id="0" * 31 + "1"
         )
         tool_name = payload.tool_call.name if payload.tool_call else None
-        policy = await svc.policy.evaluate(built.policy_input(body.stage, tool_name))
+        contextual = getattr(svc, "contextual", None)
+        descriptor = describe(
+            stage=body.stage.value,
+            action=body.request.action,
+            resource=body.request.resource,
+            tool_name=tool_name,
+            tool_arguments=payload.tool_call.arguments if payload.tool_call else None,
+            request_arguments=body.request.arguments,
+            tool_metadata=body.request.tool_metadata,
+            internal_domains=contextual.cfg.internal_domains if contextual is not None else (),
+        )
+        policy_input = built.policy_input(body.stage, tool_name)
+        policy_input["descriptor"] = descriptor.to_dict()
+        policy = await svc.policy.evaluate(policy_input)
         if not policy.allow:
             outcome = StageOutcome(Decision.BLOCK, f"policy denied: {policy.reason}", built.context.risk_score, None)
         else:
@@ -88,6 +102,8 @@ async def simulate(svc: Services, body: SimulateIn) -> dict[str, Any]:
             "trust_score": built.context.trust_score,
             "policy": {"allow": policy.allow, "reason": policy.reason, "obligations": policy.obligations},
             "results": [r.model_dump(mode="json") for r in outcome.results],
+            # What the request does, as the gateway parsed it (no session state: simulation is stateless).
+            "descriptor": descriptor.to_dict(),
             "payload": GuardPayloadIn.model_validate(released.model_dump(exclude={"stage"})).model_dump(mode="json")
             if released
             else None,

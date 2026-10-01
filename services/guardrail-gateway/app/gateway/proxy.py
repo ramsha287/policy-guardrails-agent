@@ -92,9 +92,13 @@ def _with_text(content: Any, text: str) -> Any:
     return text
 
 
-def _meta(headers: Mapping[str, str], body: dict[str, Any], cfg: ProxyConfig) -> dict[str, Any]:
+def _meta(
+    headers: Mapping[str, str], body: dict[str, Any], cfg: ProxyConfig, bound_agent: str | None = None
+) -> dict[str, Any]:
     return {
-        "agent_id": headers.get("x-agent-id") or cfg.default_agent_id,
+        # A key bound to one agent acts as that agent unless the header says otherwise (a mismatch
+        # is then denied by the identity check).
+        "agent_id": headers.get("x-agent-id") or bound_agent or cfg.default_agent_id,
         "action": headers.get("x-guardrail-action") or "llm.chat",
         "data_classification": (headers.get("x-data-classification") or "INTERNAL").upper(),
         "user_id": headers.get("x-user-id") or (body.get("user") if isinstance(body.get("user"), str) else None),
@@ -159,7 +163,7 @@ class ChatProxy:
             raise ProxyRejected(
                 openai_error(400, f"model {body.get('model')!r} is not allowed here", "model_not_allowed")
             )
-        meta = _meta(headers, body, self.cfg)
+        meta = _meta(headers, body, self.cfg, principal.agent_id)
 
         # 1. input stage over every text the provider will see: message contents, plus the arguments
         #    of earlier tool calls in the history and the tool descriptions (both can carry PII or

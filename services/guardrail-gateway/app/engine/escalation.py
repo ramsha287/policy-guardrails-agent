@@ -29,9 +29,16 @@ def preview_of(payload: Payload) -> str:
 
 
 async def hold_for_review(
-    control_plane: ControlPlaneClient | None, ctx: SecurityContext, stage: Stage, outcome: StageOutcome
+    control_plane: ControlPlaneClient | None,
+    ctx: SecurityContext,
+    stage: Stage,
+    outcome: StageOutcome,
+    source: str | None = None,
 ) -> tuple[StageOutcome, str | None]:
-    """File a review with the held payload. If the queue is unavailable, block (fail-closed)."""
+    """File a review with the held payload. If the queue is unavailable, block (fail-closed).
+
+    `source` names what held it when no guardrail did (e.g. "gateway-risk" for the decision table).
+    """
     deciding = next((r for r in outcome.results if r.decision == Decision.ESCALATE and r.mode == "enforce"), None)
     if control_plane is None or outcome.payload is None:
         return StageOutcome(
@@ -45,7 +52,7 @@ async def hold_for_review(
                 "request_id": ctx.request_id,
                 "stage": stage.value,
                 "agent_id": ctx.agent_id,
-                "guardrail_id": deciding.guardrail_id if deciding else "unknown",
+                "guardrail_id": deciding.guardrail_id if deciding else (source or "unknown"),
                 "reason": outcome.reason,
                 "risk_score": outcome.risk_score,
                 "payload": outcome.payload.model_dump(mode="json"),

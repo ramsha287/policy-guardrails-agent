@@ -18,6 +18,7 @@ from sqlalchemy import text
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from app.audit.chain import AuditChain
 from app.audit.digest import payload_digest
 from app.audit.spool import AuditSpool
 from app.db.models import AuditEvent
@@ -26,6 +27,20 @@ from app.observability import AUDIT_DROPPED, AUDIT_SPOOL_BYTES, AUDIT_SPOOLED, A
 __all__ = ["AuditSink", "AuditWriter", "payload_digest"]
 
 logger = logging.getLogger(__name__)
+
+
+# Columns added in migration 0002. Every row of a batch must carry the same keys, so events that
+# lack them (spooled before the upgrade, tests, other writers) get NULLs.
+OPTIONAL_COLUMNS = (
+    "outcome", "reason_codes", "descriptor", "risk", "assurance", "chain_id", "chain_seq", "prev_hash", "record_hash",
+)  # fmt: skip
+
+
+def _complete(batch: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    for e in batch:
+        for col in OPTIONAL_COLUMNS:
+            e.setdefault(col, None)
+    return batch
 
 
 class AuditSink(Protocol):
@@ -45,8 +60,10 @@ class AuditWriter:
         spool: AuditSpool | None = None,
         replay_seconds: float = 10.0,
         drain_timeout_seconds: float = 5.0,
+        chain: AuditChain | None = None,
     ) -> None:
         self._sm = sessionmaker
+        self._chain = chain
         self._maintenance = maintenance
         self._spool = spool
         self._replay_seconds = replay_seconds
@@ -70,6 +87,8 @@ class AuditWriter:
     def submit(self, event: dict[str, Any]) -> None:
         event.setdefault("id", uuid.uuid4())
         event.setdefault("created_at", datetime.now(UTC))
+        if self._chain is not None:
+            self._chain.stamp(event)  # synchronous, in submit order (see app/audit/chain.py)
         try:
             self._queue.put_nowait(event)
         except asyncio.QueueFull:
@@ -173,7 +192,7 @@ class AuditWriter:
     async def _write(self, batch: list[dict[str, Any]]) -> None:
         async with self._sm() as s:
             # ON CONFLICT DO NOTHING makes a retried batch idempotent.
-            await s.execute(insert(AuditEvent).on_conflict_do_nothing(), batch)
+            await s.execute(insert(AuditEvent).on_conflict_do_nothing(), _complete(batch))
             await s.commit()
         AUDIT_WRITTEN.inc(len(batch))
 

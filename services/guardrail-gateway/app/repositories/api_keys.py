@@ -32,4 +32,4 @@ class PgApiKeyStore:
             return None
         if key.expires_at is not None and key.expires_at <= now:
             return None
-        return Principal(str(key.id), key.tenant_id, key.name, frozenset(key.scopes or []))
+        return Principal(str(key.id), key.tenant_id, key.name, frozenset(key.scopes or []), agent_id=key.agent_id)

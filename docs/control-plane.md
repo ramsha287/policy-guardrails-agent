@@ -64,18 +64,21 @@ CP=localhost:8200/cp/v1; A="X-Admin-Key: $CP_ADMIN_KEY"; B="X-Admin-Key: $CP_APP
 J='content-type: application/json'
 ```
 
-**Catalog** (published to gateways immediately):
+**Catalog** (published to gateways immediately). Register the agent first, then create its key
+with `agent_id`: a bound key can only act as that agent (see
+[contextual-decisions.md](contextual-decisions.md)). PATCH changes only the fields you send.
 
 ```bash
 curl -s -XPOST $CP/tenants -H "$A" -H "$J" -d '{"id":"acme","name":"Acme"}'
-curl -s -XPOST $CP/tenants/acme/api-keys -H "$A" -H "$J" \
-  -d '{"name":"support-bot","environments":["dev","staging"]}'   # returns the raw key once
 curl -s -XPUT $CP/tenants/acme/agents/support-bot -H "$A" -H "$J" \
   -d '{"base_trust_score":80,"allowed_tools":["search.*","crm.read"]}'
+curl -s -XPOST $CP/tenants/acme/api-keys -H "$A" -H "$J" \
+  -d '{"name":"support-bot","agent_id":"support-bot","environments":["dev","staging"]}'   # returns the raw key once
 curl -s -XPUT $CP/tenants/acme/actions -H "$A" -H "$J" \
   -d '{"action":"crm.read","resource_pattern":"*","base_risk_score":30}'
 curl -s -XPUT $CP/tenants/acme/modifiers -H "$A" -H "$J" -d '{"kind":"classification","value":"PII","delta":20}'
 curl -s -XPATCH $CP/tenants/acme/api-keys/$KEY_ID -H "$A" -H "$J" -d '{"rate_limit_per_minute":120}'  # null = default, 0 = unlimited
+curl -s -XPATCH $CP/tenants/acme/api-keys/$KEY_ID -H "$A" -H "$J" -d '{"agent_id":"support-bot"}'      # bind (null = unbind)
 curl -s -XDELETE $CP/tenants/acme/api-keys/$KEY_ID -H "$A"              # revoke
 curl -s -XPATCH $CP/tenants/acme -H "$A" -H "$J" -d '{"status":"suspended"}'  # every key stops working
 ```

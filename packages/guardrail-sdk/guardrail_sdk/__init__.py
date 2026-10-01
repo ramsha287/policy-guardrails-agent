@@ -1,4 +1,12 @@
-from .api import GuardPayloadIn, GuardrailOutcome, GuardRequest, GuardResponse, PolicyOutcome
+from .api import (
+    GuardPayloadIn,
+    GuardrailOutcome,
+    GuardRequest,
+    GuardResponse,
+    PolicyOutcome,
+    RiskAssessment,
+    RiskSignal,
+)
 from .client import GuardClient, GuardrailGatewayError
 from .guardrail import EmptyConfig, Guardrail, PluginContext, SecretReader, StateStore
 from .hooks import GuardDefaults, GuardHooks, GuardrailBlocked, GuardrailEscalated, SyncGuardClient, SyncGuardHooks
@@ -48,6 +56,8 @@ __all__ = [
     "PolicyOutcome",
     "RemoteGuardrail",
     "RemoteSpec",
+    "RiskAssessment",
+    "RiskSignal",
     "SDK_VERSION",
     "SecretReader",
     "SecurityContext",

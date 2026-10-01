@@ -97,8 +97,11 @@ control plane can do this, so keep that access limited to the platform team.
 ## Connecting an agent in production
 
 1. In the console, go to **Tenants & keys**. Pick or create the tenant, register the agent
-   (its trust score and allowed tools) and create a gateway key with **New API key**. You can give
-   the key its own rate limit.
+   (its trust score and allowed tools) and create a gateway key with **New API key**, with that
+   agent selected. A bound key can only act as its agent; give each agent its own key. You can
+   also give the key its own rate limit. Once every key is bound, set
+   `gateway.contextual.requireBoundKeys=true` in production
+   ([contextual-decisions.md](contextual-decisions.md)).
 2. Put the `gk_` key in the agent's secret store.
 3. Point the agent at the gateway, either with the SDK hooks or by using the OpenAI-compatible
    proxy with no code changes ([agent-integration.md](agent-integration.md)).

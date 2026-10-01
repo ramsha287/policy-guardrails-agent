@@ -36,10 +36,14 @@ comes from the gateway's configuration.
 | --- | --- |
 | 200 | `decision` is `allow`, `modify` (use the returned `payload`) or `block` (a guardrail blocked) |
 | 202 | `decision` is `escalate`: the payload is held for human review. Poll `GET /v1/escalations/{escalation_id}` |
-| 403 | `decision` is `block` because OPA denied the request (`policy.reason`) |
+| 403 | `decision` is `block` because OPA denied the request (`policy.reason`), the key is bound to a different agent (`KEY_AGENT_MISMATCH`), the key is unbound and `REQUIRE_BOUND_KEYS` is on (`UNBOUND_KEY`), or (enforce mode) the decision table denied or quarantined the session |
 | 401 / 422 / 413 | Bad key / invalid body / body over 1 MB |
 | 429 | Per-key rate limit (`GUARD_RATE_LIMIT_PER_MINUTE`, or the key's own limit); see `Retry-After` |
 | 503 | No guardrail snapshot is loaded (fail-closed) |
+
+Responses also carry `outcome` (`allow`, `allow_restricted`, `modify`, `hold`, `deny`,
+`quarantine_session`), `reason_codes`, `obligations`, `assurance` (`A0`/`A1`) and `risk` (score,
+band, trust, signals). See [contextual-decisions.md](contextual-decisions.md).
 
 Ops endpoints: `GET /health`, `GET /ready`, `GET /version`, `GET /metrics` (Prometheus).
 

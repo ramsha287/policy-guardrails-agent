@@ -79,6 +79,24 @@ async def test_tenant_and_keys(env):
     assert r.status_code == 404
 
 
+async def test_agent_binding_over_http(env):
+    alice, _, viewer = await env.keys()
+    c = env.client
+    await c.post(f"{BASE}/tenants", json={"id": "acme", "name": "Acme"}, headers=alice)
+    r = await c.post(f"{BASE}/tenants/acme/api-keys", json={"name": "bot", "agent_id": "bot"}, headers=alice)
+    assert r.status_code == 422  # agent not registered yet
+    await c.put(f"{BASE}/tenants/acme/agents/bot", json={"base_trust_score": 70}, headers=alice)
+    created = (
+        await c.post(f"{BASE}/tenants/acme/api-keys", json={"name": "bot", "rate_limit_per_minute": 60}, headers=alice)
+    ).json()
+    assert created["agent_id"] is None
+    r = await c.patch(f"{BASE}/tenants/acme/api-keys/{created['id']}", json={"agent_id": "bot"}, headers=alice)
+    assert r.status_code == 200 and r.json()["agent_id"] == "bot"
+    assert r.json()["rate_limit_per_minute"] == 60  # untouched: only the fields sent change
+    r = await c.patch(f"{BASE}/tenants/acme/api-keys/{created['id']}", json={"agent_id": "bot"}, headers=viewer)
+    assert r.status_code == 403
+
+
 async def test_two_person_publish_over_http(env):
     alice, bob, _ = await env.keys()
     await seed(env, alice)

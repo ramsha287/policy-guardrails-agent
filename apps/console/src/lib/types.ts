@@ -52,6 +52,7 @@ export interface ApiKey {
   created_at: string;
   revoked_at: string | null;
   rate_limit_per_minute?: number | null; // null = gateway default, 0 = unlimited
+  agent_id?: string | null; // the only agent this key may act as (A1); null = any claimed agent_id (A0)
 }
 
 export interface CreatedApiKey extends ApiKey {

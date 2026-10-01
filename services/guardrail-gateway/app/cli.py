@@ -1,7 +1,7 @@
 """Admin CLI until the control plane ships (phase 4).
 
 python -m app.cli create-tenant --id acme --name "Acme Corp"
-python -m app.cli create-api-key --tenant acme --name support-bot
+python -m app.cli create-api-key --tenant acme --name support-bot --agent support-bot
 python -m app.cli upsert-agent --tenant acme --agent support-bot --trust 80 --tools '*'
 python -m app.cli upsert-action --tenant acme --action database.read --resource customer_db --risk 40
 python -m app.cli upsert-modifier --tenant acme --kind classification --value PII --delta 20
@@ -23,6 +23,7 @@ from sqlalchemy import text
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from app.audit.chain import CHAIN_FIELDS, ChainReport, ChainVerifier
 from app.config import get_settings
 from app.db.models import ActionCatalogEntry, AgentProfile, GatewayApiKey, ScoreModifier, Tenant
 from app.db.session import make_engine, make_sessionmaker
@@ -35,10 +36,17 @@ async def create_tenant(sm: async_sessionmaker[AsyncSession], tenant_id: str, na
         await s.commit()
 
 
-async def create_api_key(sm: async_sessionmaker[AsyncSession], tenant: str, name: str, scopes: list[str]) -> str:
+async def create_api_key(
+    sm: async_sessionmaker[AsyncSession], tenant: str, name: str, scopes: list[str], agent: str | None = None
+) -> str:
+    """`agent` binds the key to one agent_id (identity assurance A1); None accepts any (A0)."""
     raw = generate_key()
     async with sm() as s:
-        s.add(GatewayApiKey(tenant_id=tenant, name=name, key_hash=hash_key(raw), prefix=raw[:12], scopes=scopes))
+        s.add(
+            GatewayApiKey(
+                tenant_id=tenant, name=name, key_hash=hash_key(raw), prefix=raw[:12], scopes=scopes, agent_id=agent
+            )
+        )
         await s.commit()
     return raw
 
@@ -162,6 +170,26 @@ async def bootstrap_dev(sm: async_sessionmaker[AsyncSession], out: Path, project
     print(f"Bootstrap complete. Keys written to {out}")
 
 
+async def verify_audit_chain(sm: async_sessionmaker[AsyncSession], tenant: str | None, days: int) -> ChainReport:
+    """Recompute the decision-record hash chains (app/audit/chain.py) for the last `days` days."""
+    cols = ", ".join(CHAIN_FIELDS + ("record_hash",))
+    q = (
+        f"SELECT {cols} FROM audit.audit_events "  # noqa: S608 - fixed column list, values are bound
+        "WHERE chain_id IS NOT NULL AND created_at > now() - make_interval(days => :d)"
+    )
+    params: dict[str, Any] = {"d": days}
+    if tenant:
+        q += " AND tenant_id = :t"
+        params["t"] = tenant
+    q += " ORDER BY chain_id, tenant_id, chain_seq"
+    verifier = ChainVerifier()
+    async with sm() as s:  # streamed (server-side cursor): constant memory however many rows
+        result = await s.stream(text(q), params)
+        async for row in result.mappings():
+            verifier.add(row)
+    return verifier.report
+
+
 async def _main(args: argparse.Namespace) -> int:
     settings = get_settings()
     engine = make_engine(settings.postgres_dsn)
@@ -172,7 +200,7 @@ async def _main(args: argparse.Namespace) -> int:
             await create_tenant(sm, args.id, args.name)
             print(f"tenant {args.id} ready")
         elif cmd == "create-api-key":
-            key = await create_api_key(sm, args.tenant, args.name, args.scopes.split(","))
+            key = await create_api_key(sm, args.tenant, args.name, args.scopes.split(","), args.agent)
             print(key)
             print("Store this key now; only its hash is kept.", file=sys.stderr)
         elif cmd == "upsert-agent":
@@ -181,6 +209,12 @@ async def _main(args: argparse.Namespace) -> int:
             await upsert_action(sm, args.tenant, args.action, args.resource, args.risk)
         elif cmd == "upsert-modifier":
             await upsert_modifier(sm, args.tenant, args.kind, args.value, args.delta)
+        elif cmd == "verify-audit-chain":
+            report = await verify_audit_chain(sm, args.tenant, args.days)
+            print(f"checked {report.records} record(s) in {report.chains} chain(s)")
+            for problem in report.problems or []:
+                print(f"PROBLEM {problem}")
+            return 0 if report.ok else 1
         elif cmd == "partitions":
             async with sm() as s:
                 await s.execute(text("SELECT audit.ensure_partitions(3)"))
@@ -208,6 +242,7 @@ def build_parser() -> argparse.ArgumentParser:
     k.add_argument("--tenant", required=True)
     k.add_argument("--name", required=True)
     k.add_argument("--scopes", default="guard:invoke")
+    k.add_argument("--agent", default=None, help="bind the key to this agent_id (recommended)")
     a = sub.add_parser("upsert-agent")
     a.add_argument("--tenant", required=True)
     a.add_argument("--agent", required=True)
@@ -224,6 +259,9 @@ def build_parser() -> argparse.ArgumentParser:
     m.add_argument("--value", required=True)
     m.add_argument("--delta", type=int, required=True)
     sub.add_parser("partitions")
+    v = sub.add_parser("verify-audit-chain", help="check the decision-record hash chains; exit 1 on problems")
+    v.add_argument("--tenant", default=None)
+    v.add_argument("--days", type=int, default=30)
     cred = sub.add_parser("ai-gateway-credentials", help="create the redaction project + service key; print them")
     cred.add_argument("--project-service-url", default="http://project-service:8000")
     cred.add_argument("--project-name", default="guardrail-pii")

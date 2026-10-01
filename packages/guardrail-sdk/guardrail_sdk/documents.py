@@ -18,7 +18,7 @@ import json
 from datetime import datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, SerializerFunctionWrapHandler, model_serializer, model_validator
 
 from .models import Stage
 
@@ -94,6 +94,16 @@ class CatalogApiKey(BaseModel):
     environments: list[Environment] | None = None  # None = every environment
     expires_at: datetime | None = None
     rate_limit_per_minute: int | None = Field(default=None, ge=0)  # None = gateway default, 0 = unlimited
+    # The only agent this key may act as (identity assurance A1). None = any agent_id the caller
+    # claims (A0, legacy). Left out of the published JSON when None, so older gateways still load it.
+    agent_id: str | None = Field(default=None, max_length=128)
+
+    @model_serializer(mode="wrap")
+    def _omit_unbound_agent(self, handler: SerializerFunctionWrapHandler) -> Any:
+        data = handler(self)
+        if data.get("agent_id") is None:
+            data.pop("agent_id", None)  # unchanged documents (and hashes) for unbound keys
+        return data
 
 
 class CatalogAgent(BaseModel):

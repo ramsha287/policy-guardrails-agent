@@ -23,6 +23,7 @@ class HeartbeatIn(BaseModel):
     snapshot_version: str | None = None
     catalog_version: str | None = None
     last_error: str | None = Field(None, max_length=4000)
+    capabilities: list[str] = Field(default_factory=list, max_length=64)
 
 
 class ReviewIn(BaseModel):
@@ -76,6 +77,7 @@ async def heartbeat(body: HeartbeatIn, c: Container = Depends(container)):
         snapshot_version=body.snapshot_version,
         catalog_version=body.catalog_version,
         last_error=body.last_error,
+        capabilities=body.capabilities,
     )
     return {"installed": g.installed, "last_error": g.last_error}
 

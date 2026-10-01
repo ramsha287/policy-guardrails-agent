@@ -26,6 +26,7 @@ class GatewayService:
         snapshot_version: str | None,
         catalog_version: str | None,
         last_error: str | None,
+        capabilities: list[str] | None = None,
     ) -> GatewayRecord:
         installed = []
         problems = []
@@ -45,6 +46,7 @@ class GatewayService:
             last_error="; ".join(filter(None, [last_error, *problems])) or None,
             installed=sorted(installed),
             last_seen=utcnow(),
+            capabilities=sorted(set(capabilities or [])),
         )
         await self.store.put_gateway(record)
         return record

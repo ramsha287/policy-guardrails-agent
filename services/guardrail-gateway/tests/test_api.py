@@ -59,7 +59,7 @@ class Snapshots:
         return self.current.version if self.current else None
 
 
-def make_client(snap=..., policy=None, max_body=4096):
+def make_client(snap=..., policy=None, max_body=4096, contextual=None):
     settings = Settings(postgres_dsn="postgresql+asyncpg://unused/db", max_body_bytes=max_body)
     redact = bind(
         "ai-gateway-pii",
@@ -74,6 +74,7 @@ def make_client(snap=..., policy=None, max_body=4096):
         engine=GuardrailEngine(),
         snapshots=Snapshots(snapshot(redact) if snap is ... else snap),
         audit=Audit(),
+        contextual=contextual,
     )
     app = create_app(settings, services)
     return httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://gw"), services
@@ -361,3 +362,27 @@ async def test_proxy_route_auth_and_disabled_state():
     assert ok.json()["choices"][0]["message"]["content"] == "done"
     assert ok.headers["x-guardrail-input-decision"] == "allow"
     assert ok.headers["x-guardrail-output-decision"] == "allow"
+
+
+class BoundKeys:
+    async def lookup(self, key_hash):
+        if key_hash == hash_key(KEY):
+            return Principal("k1", "demo", "test", frozenset({"guard:invoke"}), agent_id="research-agent")
+        return None
+
+
+async def test_agent_bound_key_and_risk_fields_over_http():
+    from app.risk.contextual import ContextualDecisions
+    from app.session.store import MemorySessionStore
+
+    client, svc = make_client(contextual=ContextualDecisions(MemorySessionStore(), mode="shadow"))
+    svc.auth = Authenticator(BoundKeys())
+    async with client:
+        ok = await client.post("/v1/guard/input", json=BODY, headers={"X-API-Key": KEY})
+        bad = await client.post("/v1/guard/input", json={**BODY, "agent_id": "other-agent"}, headers={"X-API-Key": KEY})
+    assert ok.status_code == 200, ok.text
+    body = ok.json()
+    assert body["assurance"] == "A1" and body["outcome"] == "modify"
+    assert body["risk"]["mode"] == "shadow" and body["risk"]["band"] == "low"
+    assert bad.status_code == 403 and bad.json()["reason_codes"] == ["KEY_AGENT_MISMATCH"]
+    assert svc.audit.events[-1]["outcome"] == "deny"
