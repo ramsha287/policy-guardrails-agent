@@ -31,6 +31,7 @@ from guardrail_sdk import (
     RiskAssessment,
     RiskSignal,
     Stage,
+    VerificationInfo,
 )
 
 if TYPE_CHECKING:  # app.services imports the database layer
@@ -48,7 +49,7 @@ class GuardError(Exception):
 
 @dataclass(frozen=True)
 class StageResult:
-    status: int  # 200 allow/modify/block, 202 escalate (held), 403 OPA denied
+    status: int  # 200 allow/modify/block, 202 escalate (held) or verify (user must confirm), 403 denied
     response: GuardResponse
 
 
@@ -73,6 +74,8 @@ async def run_stage(
         raise GuardError(422, exc.errors()[0]["msg"]) from exc
 
     ctxd: ContextualDecisions | None = getattr(svc, "contextual", None)
+    payload_sha256 = payload_digest(payload.model_dump(mode="json"))
+    verification = None
     with span("gateway.guard", stage=stage.value, tenant_id=principal.tenant_id, agent_id=body.agent_id):
         built = await svc.contexts.build(principal=principal, req=body, request_id=request_id, trace_id=trace_id)
         ctx = built.context
@@ -121,11 +124,24 @@ async def run_stage(
                     engine_decision=outcome.decision,
                     accepts_obligations=bool(body.accepts_obligations),
                 )
+                if table is not None and table.outcome == "verify":
+                    table, verification = await ctxd.verify(
+                        prepared,
+                        table,
+                        principal=principal,
+                        body=body,
+                        stage=stage,
+                        payload=payload,
+                        payload_sha256=payload_sha256,
+                        environment=ctx.environment,
+                    )
                 if table is not None and ctxd.enforcing:
                     outcome, status = _apply_table(table, outcome, status, prepared)
+                    if verification is not None:
+                        status = 202  # the user confirms, then the agent retries the identical request
 
     escalation_id: str | None = None
-    if outcome.decision == Decision.ESCALATE:
+    if outcome.decision == Decision.ESCALATE and verification is None:
         outcome, escalation_id = await hold_for_review(
             svc.control_plane, ctx, stage, outcome, source="gateway-risk" if _risk_held(table, ctxd) else None
         )
@@ -182,6 +198,16 @@ async def run_stage(
         obligations=obligations,
         risk=risk_out,
         assurance=principal.assurance,
+        verification=VerificationInfo(
+            id=verification.id,
+            kind=verification.kind,
+            status=verification.status,
+            expires_at=verification.expires_at,
+            summary=verification.summary,
+            user_id=verification.user_id,
+        )
+        if verification is not None
+        else None,
     )
 
     svc.audit.submit(
@@ -197,14 +223,16 @@ async def run_stage(
             "action": ctx.action,
             "resource": ctx.resource,
             "decision": outcome.decision.value,
-            "reason": outcome.reason + (f" [escalation {escalation_id}]" if escalation_id else ""),
+            "reason": outcome.reason
+            + (f" [escalation {escalation_id}]" if escalation_id else "")
+            + (f" [verification {verification.id}]" if verification is not None else ""),
             "risk_score": response.risk_score,
             "trust_score": ctx.trust_score,
             "policy_allow": policy.allow,
             "policy_reason": policy.reason,
             # Findings carry types/offsets/scores only (plugin requirement C3).
             "guardrail_results": [r.model_dump(mode="json") for r in outcome.results],
-            "payload_sha256": payload_digest(payload.model_dump(mode="json")),
+            "payload_sha256": payload_sha256,
             "snapshot_version": snapshot.version,
             "latency_ms": latency_ms,
             "usage_bytes": usage_bytes,
@@ -252,6 +280,9 @@ def _apply_table(
     risk = prepared.assessment.score if prepared.assessment else outcome.risk_score
     if legacy == Decision.BLOCK:
         return StageOutcome(Decision.BLOCK, f"denied by decision table ({codes})", risk, None, outcome.results), 403
+    if legacy == Decision.ESCALATE and table.outcome == "verify":
+        reason = f"user confirmation required ({codes})"
+        return StageOutcome(Decision.ESCALATE, reason, risk, None, outcome.results), 202
     if legacy == Decision.ESCALATE:
         reason = f"held for review: risk {prepared.assessment.band if prepared.assessment else '?'} ({codes})"
         return StageOutcome(Decision.ESCALATE, reason, risk, outcome.payload, outcome.results), status

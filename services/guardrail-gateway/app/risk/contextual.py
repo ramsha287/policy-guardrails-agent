@@ -5,6 +5,7 @@ Used by app/gateway/flow.py around the existing Context Builder -> OPA -> Guardr
     identity check   (always enforced: a key bound to agent X can't act as agent Y)
     prepare()        descriptor + session view + risk assessment, before OPA (OPA sees them too)
     decide()         decision table, after OPA and the guardrails
+    verify()         when the table said `verify`: dry run / user confirmation / human (app/verify)
     record()         update session state, baselines and trust penalties, after the decision
 
 RISK_MODE controls how much of this changes decisions:
@@ -21,11 +22,14 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any, Literal
 
-from app.context.descriptors import ActionDescriptor, describe
+from app.audit.digest import payload_digest
+from app.context.descriptors import ActionDescriptor, describe, sql_text
 from app.gateway.auth import Principal
 from app.risk.decision import TableResult, decide
 from app.risk.engine import Assessment, RiskConfig, assess
 from app.session.store import Penalty, SessionStore, SessionUpdate, SessionView
+from app.verify.engine import VerificationEngine, VerifyContext
+from app.verify.model import Verification, request_hash
 from guardrail_sdk import Decision, GuardRequest, Payload, Stage
 
 RiskMode = Literal["off", "shadow", "enforce"]
@@ -59,6 +63,13 @@ class Prepared:
         return out
 
 
+def _request_digest(body: GuardRequest) -> str:
+    """Everything in the request except the payload (hashed separately) and the caller's
+    capabilities (`accepts_obligations`, `verification_channels`), which don't change the action."""
+    rest = body.model_dump(mode="json", exclude={"payload", "accepts_obligations", "verification_channels"})
+    return payload_digest(rest)
+
+
 def volume_key(d: ActionDescriptor) -> str | None:
     return f"{d.kind}:{d.verb}:{d.target}" if d.kind in ("sql", "http", "file") and d.target else None
 
@@ -72,8 +83,10 @@ class ContextualDecisions:
         require_bound_keys: bool = False,
         config: RiskConfig | None = None,
         clock: Callable[[], float] = time.time,
+        verifier: VerificationEngine | None = None,
     ) -> None:
         self.store = store
+        self.verifier = verifier
         self.mode: RiskMode = mode if store is not None else "off"
         self.require_bound_keys = require_bound_keys
         self.cfg = config or RiskConfig()
@@ -144,7 +157,44 @@ class ContextualDecisions:
             quarantined=prepared.view.quarantined(self._now()),
             accepts_obligations=accepts_obligations,
             cfg=self.cfg,
+            verification_available=self.verifier is not None,
         )
+
+    async def verify(
+        self, prepared: Prepared, table: TableResult, *, principal: Principal, body: GuardRequest, stage: Stage,
+        payload: Payload, payload_sha256: str, environment: str,
+    ) -> tuple[TableResult, Verification | None]:  # fmt: skip
+        """Resolve a `verify` outcome. Shadow mode only describes the plan (nothing runs or is stored)."""
+        if table.outcome != "verify" or self.verifier is None:
+            return table, None
+        tool = payload.tool_call
+        c = VerifyContext(
+            tenant_id=principal.tenant_id,
+            agent_id=body.agent_id,
+            user_id=body.user_id,
+            request_hash=request_hash(
+                tenant=principal.tenant_id,
+                agent_id=body.agent_id,
+                stage=stage.value,
+                action=body.action,
+                resource=body.resource,
+                user_id=body.user_id,
+                session_id=body.session_id,
+                payload_sha256=payload_sha256,
+                request_sha256=_request_digest(body),
+            ),  # fmt: skip
+            descriptor=prepared.descriptor,
+            codes=(*table.reason_codes, *(prepared.assessment.codes if prepared.assessment else ())),
+            environment=environment,
+            assurance=principal.assurance,
+            channels=tuple(body.verification_channels or ()),
+            tool_name=tool.name if tool else None,
+            resource=body.resource,
+            sql=sql_text(tool.arguments if tool else None, body.arguments),
+        )
+        r = await self.verifier.resolve(c) if self.enforcing else self.verifier.describe(c)
+        out = TableResult(r.outcome, tuple(dict.fromkeys((*table.reason_codes, *r.codes))))  # type: ignore[arg-type]
+        return out, r.verification
 
     @property
     def enforcing(self) -> bool:

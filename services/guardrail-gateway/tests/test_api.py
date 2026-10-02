@@ -386,3 +386,84 @@ async def test_agent_bound_key_and_risk_fields_over_http():
     assert body["risk"]["mode"] == "shadow" and body["risk"]["band"] == "low"
     assert bad.status_code == 403 and bad.json()["reason_codes"] == ["KEY_AGENT_MISMATCH"]
     assert svc.audit.events[-1]["outcome"] == "deny"
+
+
+async def test_verification_routes():
+    import time
+
+    from app.risk.contextual import ContextualDecisions
+    from app.session.store import MemorySessionStore
+    from app.verify.engine import VerificationEngine
+    from app.verify.model import Verification
+    from app.verify.store import MemoryVerificationStore
+    from app.verify.user_token import UserTokenConfig, UserTokenVerifier, mint_dev_token
+
+    dev = "dev-secret-for-tests-0123456789abcdef"
+    engine = VerificationEngine(
+        MemoryVerificationStore(), user_tokens=UserTokenVerifier(UserTokenConfig(dev_secret=dev))
+    )
+    now = time.time()
+    await engine.store.put_verification(
+        Verification(
+            "v1", "demo", "h1", "user_confirmation", "research-agent", "u1", "send x", "pending", now, now + 600
+        )
+    )
+    client, _ = make_client(contextual=ContextualDecisions(MemorySessionStore(), mode="enforce", verifier=engine))
+    k = {"X-API-Key": KEY}
+    async with client:
+        assert (await client.get("/v1/verifications/v1")).status_code == 401
+        assert (await client.get("/v1/verifications/nope", headers=k)).status_code == 404
+        got = await client.get("/v1/verifications/v1", headers=k)
+        no_token = await client.post("/v1/verifications/v1/confirm", json={"approve": True}, headers=k)
+        wrong = await client.post(
+            "/v1/verifications/v1/confirm",
+            json={"approve": True},
+            headers={**k, "Authorization": f"Bearer {mint_dev_token(dev, 'u2', nonce='v1')}"},
+        )
+        right = {**k, "Authorization": f"Bearer {mint_dev_token(dev, 'u1', nonce='v1')}"}
+        ok = await client.post("/v1/verifications/v1/confirm", json={"approve": True}, headers=right)
+        again = await client.post("/v1/verifications/v1/confirm", json={"approve": True}, headers=right)
+    assert got.status_code == 200 and got.json()["status"] == "pending" and got.json()["summary"] == "send x"
+    assert no_token.status_code == 401
+    assert wrong.status_code == 403 and "different user" in wrong.json()["error"]
+    assert ok.status_code == 200 and ok.json()["status"] == "confirmed"
+    assert again.status_code == 409
+    assert [e.kind for e in await engine.store.evidence("demo", "h1")] == ["user_confirmation"]
+
+
+async def test_verification_routes_off_without_a_verifier():
+    client, _ = make_client()
+    async with client:
+        r = await client.get("/v1/verifications/v1", headers={"X-API-Key": KEY})
+    assert r.status_code == 404 and "not enabled" in r.json()["error"]
+
+
+async def test_authzen_endpoints():
+    client, svc = make_client()
+    ev = {
+        "subject": {"type": "agent", "id": "research-agent"},
+        "action": {"name": "llm.chat"},
+        "resource": {"type": "model", "id": "gpt", "properties": {"arguments": {"q": "hello"}}},
+    }
+    k = {"X-API-Key": KEY}
+    async with client:
+        meta = await client.get("/.well-known/authzen-configuration")
+        unauth = await client.post("/access/v1/evaluation", json=ev)
+        bad = await client.post("/access/v1/evaluation", content=b"not json", headers=k)
+        one = await client.post("/access/v1/evaluation", json=ev, headers=k)
+        missing = await client.post("/access/v1/evaluation", json={**ev, "subject": None}, headers=k)
+        batch = await client.post(
+            "/access/v1/evaluations",
+            json={**ev, "evaluations": [{}, {"subject": {"type": "agent", "id": ""}}, {}],
+                  "options": {"evaluations_semantic": "deny_on_first_deny"}},
+            headers=k,
+        )  # fmt: skip
+    assert meta.status_code == 200 and meta.json()["access_evaluation_endpoint"].endswith("/access/v1/evaluation")
+    assert unauth.status_code == 401 and bad.status_code == 400
+    assert one.status_code == 200 and one.json()["decision"] is True, one.text
+    assert one.json()["context"]["outcome"] == "allow"
+    assert missing.status_code == 200 and missing.json()["decision"] is False
+    assert missing.json()["context"]["reason_codes"] == ["INVALID_REQUEST"]
+    results = batch.json()["evaluations"]
+    assert [r["decision"] for r in results] == [True, False]  # stopped at the first deny
+    assert svc.audit.events[-1]["stage"] == "tool"

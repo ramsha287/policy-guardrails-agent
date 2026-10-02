@@ -35,15 +35,24 @@ comes from the gateway's configuration.
 | Status | Meaning |
 | --- | --- |
 | 200 | `decision` is `allow`, `modify` (use the returned `payload`) or `block` (a guardrail blocked) |
-| 202 | `decision` is `escalate`: the payload is held for human review. Poll `GET /v1/escalations/{escalation_id}` |
+| 202 | `decision` is `escalate`: either held for human review (`outcome` `hold`, poll `GET /v1/escalations/{escalation_id}`) or waiting for the user to confirm (`outcome` `verify`, see `verification`; the agent retries the identical request after `POST /v1/verifications/{id}/confirm`) |
 | 403 | `decision` is `block` because OPA denied the request (`policy.reason`), the key is bound to a different agent (`KEY_AGENT_MISMATCH`), the key is unbound and `REQUIRE_BOUND_KEYS` is on (`UNBOUND_KEY`), or (enforce mode) the decision table denied or quarantined the session |
 | 401 / 422 / 413 | Bad key / invalid body / body over 1 MB |
 | 429 | Per-key rate limit (`GUARD_RATE_LIMIT_PER_MINUTE`, or the key's own limit); see `Retry-After` |
 | 503 | No guardrail snapshot is loaded (fail-closed) |
 
-Responses also carry `outcome` (`allow`, `allow_restricted`, `modify`, `hold`, `deny`,
-`quarantine_session`), `reason_codes`, `obligations`, `assurance` (`A0`/`A1`) and `risk` (score,
-band, trust, signals). See [contextual-decisions.md](contextual-decisions.md).
+Responses also carry `outcome` (`allow`, `allow_restricted`, `modify`, `verify`, `hold`, `deny`,
+`quarantine_session`), `reason_codes`, `obligations`, `assurance` (`A0`/`A1`), `risk` (score,
+band, trust, signals) and `verification`. See [contextual-decisions.md](contextual-decisions.md).
+
+Other endpoints (same `X-API-Key`):
+
+| Endpoint | Purpose |
+| --- | --- |
+| `GET /v1/verifications/{id}` | Status of a user confirmation (`pending`, `confirmed`, `rejected`, `expired`) |
+| `POST /v1/verifications/{id}/confirm` | `{"approve": true}` with `Authorization: Bearer <user's IdP token>`. 403 wrong user / stale sign-in, 409 already decided |
+| `POST /access/v1/evaluation`, `POST /access/v1/evaluations` | OpenID AuthZEN 1.0 decisions for tool calls ([details](contextual-decisions.md#authzen-api)) |
+| `GET /.well-known/authzen-configuration` | AuthZEN metadata (no key needed) |
 
 Ops endpoints: `GET /health`, `GET /ready`, `GET /version`, `GET /metrics` (Prometheus).
 
@@ -88,7 +97,9 @@ A trigger blocks UPDATE and DELETE, so the table is append-only. Each row stores
 reasons, scores, finding types and offsets, and a SHA-256 hash of the payload. **Raw payload
 text is never stored.** If Postgres can't take writes, events go to a disk spool on the gateway
 (`AUDIT_SPOOL_DIR`) and are replayed when it recovers. On Kubernetes a CronJob runs partition
-maintenance instead of the gateway (`AUDIT_MAINTENANCE=false`).
+maintenance instead of the gateway (`AUDIT_MAINTENANCE=false`). With `OUTBOX_SINKS` set, each
+decision is also published as a `decision.made.v1` event (written in the same transaction as its
+audit row) to Redis and/or a signed webhook ([decision events](contextual-decisions.md#decision-events)).
 
 ## Tests
 
@@ -106,6 +117,9 @@ helm lint deploy/helm/guardrail-platform --set secrets.create=true              
 # ai-gateway with real Presidio (needs en_core_web_lg):
 cd services/ai-gateway/instant-redaction-service && pip install -r requirements-dev.txt && pytest
 ```
+
+Step-by-step checks of identity binding, risk, verification, AuthZEN and decision events on a
+running stack: [testing-contextual-decisions.md](testing-contextual-decisions.md).
 
 
 ## Repository layout

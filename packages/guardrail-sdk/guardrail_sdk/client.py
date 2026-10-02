@@ -17,7 +17,7 @@ from typing import Any
 
 import httpx
 
-from .api import GuardPayloadIn, GuardRequest, GuardResponse
+from .api import GuardPayloadIn, GuardRequest, GuardResponse, VerificationInfo
 from .documents import EscalationStatus
 from .models import Chunk, Message, Stage, ToolCall
 
@@ -94,6 +94,29 @@ class GuardClient:
         if resp.status_code != 200:
             raise GuardrailGatewayError(resp.status_code, resp.text[:500])
         return EscalationStatus.model_validate(resp.json())
+
+    async def verification_status(self, verification_id: str) -> VerificationInfo:
+        """Status of a pending user confirmation (outcome "verify")."""
+        try:
+            resp = await self._http.get(f"{self._base}/v1/verifications/{verification_id}", headers=self._headers)
+        except httpx.HTTPError as exc:
+            raise GuardrailGatewayError(None, f"guardrail gateway unreachable: {exc}") from exc
+        if resp.status_code != 200:
+            raise GuardrailGatewayError(resp.status_code, resp.text[:500])
+        return VerificationInfo.model_validate(resp.json())
+
+    async def confirm_verification(self, verification_id: str, user_token: str, *, approve: bool) -> VerificationInfo:
+        """Called by the host app (not the agent) with the user's token from your identity provider."""
+        headers = {**self._headers, "Authorization": f"Bearer {user_token}"}
+        try:
+            resp = await self._http.post(
+                f"{self._base}/v1/verifications/{verification_id}/confirm", json={"approve": approve}, headers=headers
+            )
+        except httpx.HTTPError as exc:
+            raise GuardrailGatewayError(None, f"guardrail gateway unreachable: {exc}") from exc
+        if resp.status_code != 200:
+            raise GuardrailGatewayError(resp.status_code, resp.text[:500])
+        return VerificationInfo.model_validate(resp.json())
 
     async def wait_for_escalation(
         self, escalation_id: str, *, timeout_seconds: float = 300.0, poll_seconds: float = 2.0

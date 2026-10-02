@@ -34,7 +34,14 @@ from guardrail_sdk.documents import CatalogDoc
 
 logger = logging.getLogger(__name__)
 
-GATEWAY_CAPABILITIES = ("agent_bound_keys", "risk_v2", "decision_records_v2")
+GATEWAY_CAPABILITIES = (
+    "agent_bound_keys",
+    "risk_v2",
+    "decision_records_v2",
+    "verification_v1",
+    "authzen_v1",
+    "outbox_v1",
+)
 
 SNAPSHOT_CHANNEL = "guardrail:snapshot.published"
 CATALOG_CHANNEL = "guardrail:catalog.published"

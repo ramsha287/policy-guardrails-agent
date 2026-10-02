@@ -23,6 +23,8 @@ global:
 #                             external Postgres only (postgresql.enabled=false)
 #   REDIS_URL                 external Redis only (redis.enabled=false), optional
 #   PROXY_UPSTREAM_API_KEY    LLM provider key, proxy mode only
+#   VERIFY_SQL_DRY_RUN        JSON {"tool or resource": "read-replica DSN"}, SQL dry-run verification only
+#   OUTBOX_WEBHOOK_SECRET     HMAC secret for the event webhook (gateway.events.webhookUrl)
 # Production: keep them in a SOPS-encrypted file (deploy/secrets) and set existingSecret.
 secrets:
   existingSecret: ""
@@ -77,6 +79,25 @@ gateway:
     requireBoundKeys: false         # true = refuse API keys not bound to one agent (A0)
     internalDomains: ""             # comma-separated, e.g. "acme.com,acme.internal"
     riskConfig: {}                  # overrides for RiskConfig weights/limits, e.g. {elevated_row_limit: 500}
+  # Verification engine: what a `verify` outcome may use before falling back to human review.
+  verification:
+    enabled: true
+    # User confirmation with tokens from your identity provider (all three needed):
+    oidcIssuer: ""                  # e.g. https://login.example.com/
+    oidcAudience: ""                # the client id your host app's tokens are issued to
+    oidcJwksUrl: ""                 # e.g. https://login.example.com/.well-known/jwks.json
+    userClaim: sub                  # token claim that must equal the request's user_id
+    maxAuthAgeSeconds: 600          # the user must have signed in this recently
+    requiredAcr: ""                 # comma-separated acr values (step-up / MFA), "" = any
+    requireNonce: true              # token nonce must be the verification id (a sign-in for this confirmation)
+    # SQL dry run: read-replica DSNs come from the Secret key VERIFY_SQL_DRY_RUN (they hold passwords).
+    sqlDryRun: false
+    dryRunMaxRows: 10000
+  # Event outbox: decision events (and hourly audit chain heads) to Redis pub/sub and/or a webhook.
+  events:
+    sinks: ""                       # "", "redis", "webhook" or "redis,webhook"
+    webhookUrl: ""                  # sinks contains webhook; signed with the Secret key OUTBOX_WEBHOOK_SECRET
+    retentionDays: 7                # published events are pruned after this
   maxBodyBytes: 1048576
   defaultGuardrailTimeoutMs: 800
   audit:
@@ -207,7 +228,8 @@ networkPolicy:
   controlPlaneNamespace: ""
   # Namespace of Prometheus, allowed to scrape /metrics. "" = no scrape access.
   prometheusNamespace: monitoring
-  # Egress for proxy mode (the LLM provider) and remote guardrails. [] = no egress outside the cluster.
+  # Egress for proxy mode (the LLM provider), remote guardrails, the IdP's JWKS (user confirmation),
+  # SQL dry-run replicas and the event webhook. [] = no egress outside the cluster.
   externalEgressCIDRs: []
 
 # ---- monitoring ---------------------------------------------------------------------------------

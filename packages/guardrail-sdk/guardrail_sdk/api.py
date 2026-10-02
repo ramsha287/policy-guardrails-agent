@@ -38,6 +38,10 @@ class GuardRequest(BaseModel):
     # read-only credentials...). Otherwise the gateway never answers "allow with restrictions":
     # it holds the request for review (or blocks) instead. None is left out of the JSON body.
     accepts_obligations: bool | None = None
+    # Verification channels the caller can complete, e.g. ["user_confirmation"]: the host app can
+    # show the user a summary and send their sign-in token to POST /v1/verifications/{id}/confirm.
+    # Without it a high-risk request is held for a human reviewer instead. None is left out.
+    verification_channels: list[str] | None = Field(default=None, max_length=8)
 
 
 class GuardrailOutcome(BaseModel):
@@ -76,6 +80,17 @@ class RiskAssessment(BaseModel):
     signals: list[RiskSignal] = Field(default_factory=list)
 
 
+class VerificationInfo(BaseModel):
+    """Set when outcome == "verify" (HTTP 202): the user must confirm, then retry the same request."""
+
+    id: str
+    kind: str  # user_confirmation
+    status: str  # pending | confirmed | rejected | expired
+    expires_at: float  # unix seconds
+    summary: str  # what to show the user (names, never values)
+    user_id: str | None = None
+
+
 class GuardResponse(BaseModel):
     request_id: str
     trace_id: str
@@ -99,6 +114,8 @@ class GuardResponse(BaseModel):
     risk: RiskAssessment | None = None
     # How strongly the API key identifies the agent: A0 = agent_id is only claimed, A1 = key bound to it.
     assurance: str | None = None
+    # Present when outcome == "verify": show `summary` to the user, confirm, then retry.
+    verification: VerificationInfo | None = None
 
     @property
     def allowed(self) -> bool:

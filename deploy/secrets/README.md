@@ -57,6 +57,8 @@ After changing a secret, restart the workloads that read it:
 | `*_POSTGRES_DSN`, `AUDIT_DSN` | each service | External Postgres; give `AUDIT_DSN` a read-only user |
 | `REDIS_URL` | gateway, control plane, redaction | External Redis |
 | `PROXY_UPSTREAM_API_KEY` | gateway | Proxy mode only |
+| `VERIFY_SQL_DRY_RUN` | gateway | SQL dry-run verification only; read-replica DSNs with a read-only user |
+| `OUTBOX_WEBHOOK_SECRET` | gateway | Event webhook only; receivers verify `X-Guardrail-Signature` with it |
 
 ## Don't
 

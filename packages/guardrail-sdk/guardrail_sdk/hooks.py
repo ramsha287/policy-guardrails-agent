@@ -22,7 +22,7 @@ from typing import Any
 
 import httpx
 
-from .api import GuardPayloadIn, GuardRequest, GuardResponse
+from .api import GuardPayloadIn, GuardRequest, GuardResponse, VerificationInfo
 from .client import GuardClient, GuardrailGatewayError
 from .documents import EscalationStatus
 from .models import Chunk, DataClassification, Decision, Message, Stage, ToolCall
@@ -51,6 +51,21 @@ class GuardrailEscalated(GuardrailBlocked):
     @property
     def escalation_id(self) -> str | None:
         return self.response.escalation_id
+
+
+class GuardrailVerificationRequired(GuardrailBlocked):
+    """The user must confirm this step first (outcome "verify").
+
+    Show `verification.summary` to the user in your app, sign them in again for this confirmation
+    (OIDC `nonce` = `verification.id`), send that token with
+    `client.confirm_verification(verification.id, user_token, approve=True)`, then retry the
+    identical call. A subclass of GuardrailBlocked (not GuardrailEscalated: there is no
+    escalation to wait for), so code that doesn't handle it treats the step as blocked.
+    """
+
+    @property
+    def verification(self) -> VerificationInfo | None:
+        return self.response.verification
 
 
 @dataclass(frozen=True)
@@ -83,6 +98,8 @@ class GuardDefaults:
 
 
 def _checked(resp: GuardResponse) -> GuardPayloadIn:
+    if resp.outcome == "verify" and resp.verification is not None:
+        raise GuardrailVerificationRequired(resp, f"user confirmation required: {resp.verification.summary}")
     if resp.decision == Decision.ESCALATE:
         raise GuardrailEscalated(resp)
     if not resp.allowed or resp.payload is None:
@@ -208,6 +225,23 @@ class SyncGuardClient:
 
     def get_escalation(self, escalation_id: str) -> EscalationStatus:
         return _sync_get_escalation(self, escalation_id)
+
+    def verification_status(self, verification_id: str) -> VerificationInfo:
+        return self._verification("GET", verification_id, None, self._headers)
+
+    def confirm_verification(self, verification_id: str, user_token: str, *, approve: bool) -> VerificationInfo:
+        """Called by the host app (not the agent) with the user's token from your identity provider."""
+        headers = {**self._headers, "Authorization": f"Bearer {user_token}"}
+        return self._verification("POST", f"{verification_id}/confirm", {"approve": approve}, headers)
+
+    def _verification(self, method: str, path: str, body: Any, headers: dict[str, str]) -> VerificationInfo:
+        try:
+            resp = self._http.request(method, f"{self._base}/v1/verifications/{path}", json=body, headers=headers)
+        except httpx.HTTPError as exc:
+            raise GuardrailGatewayError(None, f"guardrail gateway unreachable: {exc}") from exc
+        if resp.status_code != 200:
+            raise GuardrailGatewayError(resp.status_code, resp.text[:500])
+        return VerificationInfo.model_validate(resp.json())
 
     def guard(self, stage: Stage | str, payload: GuardPayloadIn, *, action: str, **fields: Any) -> GuardResponse:
         stage = Stage(stage)

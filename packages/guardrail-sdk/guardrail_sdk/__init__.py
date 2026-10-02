@@ -6,10 +6,19 @@ from .api import (
     PolicyOutcome,
     RiskAssessment,
     RiskSignal,
+    VerificationInfo,
 )
 from .client import GuardClient, GuardrailGatewayError
 from .guardrail import EmptyConfig, Guardrail, PluginContext, SecretReader, StateStore
-from .hooks import GuardDefaults, GuardHooks, GuardrailBlocked, GuardrailEscalated, SyncGuardClient, SyncGuardHooks
+from .hooks import (
+    GuardDefaults,
+    GuardHooks,
+    GuardrailBlocked,
+    GuardrailEscalated,
+    GuardrailVerificationRequired,
+    SyncGuardClient,
+    SyncGuardHooks,
+)
 from .manifest import Capabilities, Manifest, RemoteSpec
 from .models import (
     DECISION_PRECEDENCE,
@@ -49,6 +58,7 @@ __all__ = [
     "GuardrailGatewayError",
     "GuardrailOutcome",
     "GuardrailResult",
+    "GuardrailVerificationRequired",
     "Manifest",
     "Message",
     "Payload",
@@ -66,5 +76,6 @@ __all__ = [
     "SyncGuardClient",
     "SyncGuardHooks",
     "ToolCall",
+    "VerificationInfo",
     "strongest",
 ]

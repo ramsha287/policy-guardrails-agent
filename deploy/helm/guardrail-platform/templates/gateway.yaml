@@ -135,6 +135,30 @@ spec:
             {{- if $g.contextual.riskConfig }}
             - {name: RISK_CONFIG_JSON, value: {{ $g.contextual.riskConfig | toJson | quote }}}
             {{- end }}
+            {{- with $g.verification }}
+            - {name: VERIFICATION_ENABLED, value: {{ .enabled | toString | quote }}}
+            {{- if .oidcIssuer }}
+            - {name: VERIFY_OIDC_ISSUER, value: {{ .oidcIssuer | quote }}}
+            - {name: VERIFY_OIDC_AUDIENCE, value: {{ required "gateway.verification.oidcAudience is required with oidcIssuer" .oidcAudience | quote }}}
+            - {name: VERIFY_OIDC_JWKS_URL, value: {{ required "gateway.verification.oidcJwksUrl is required with oidcIssuer" .oidcJwksUrl | quote }}}
+            - {name: VERIFY_USER_CLAIM, value: {{ .userClaim | quote }}}
+            - {name: VERIFY_MAX_AUTH_AGE_SECONDS, value: {{ .maxAuthAgeSeconds | int64 | quote }}}
+            - {name: VERIFY_REQUIRED_ACR, value: {{ .requiredAcr | quote }}}
+            - {name: VERIFY_REQUIRE_NONCE, value: {{ (ne (toString .requireNonce) "false") | toString | quote }}}
+            {{- end }}
+            - {name: VERIFY_DRY_RUN_MAX_ROWS, value: {{ .dryRunMaxRows | int64 | quote }}}
+            {{- end }}
+            {{- if $g.verification.sqlDryRun }}
+            {{- include "gp.secretEnv" (dict "root" $ "name" "VERIFY_SQL_DRY_RUN") | nindent 12 }}
+            {{- end }}
+            {{- if $g.events.sinks }}
+            - {name: OUTBOX_SINKS, value: {{ $g.events.sinks | quote }}}
+            - {name: OUTBOX_RETENTION_DAYS, value: {{ $g.events.retentionDays | int64 | quote }}}
+            {{- if contains "webhook" $g.events.sinks }}
+            - {name: OUTBOX_WEBHOOK_URL, value: {{ required "gateway.events.webhookUrl is required for the webhook sink" $g.events.webhookUrl | quote }}}
+            {{- include "gp.secretEnv" (dict "root" $ "name" "OUTBOX_WEBHOOK_SECRET") | nindent 12 }}
+            {{- end }}
+            {{- end }}
             - {name: AUDIT_RETENTION_MONTHS, value: {{ $g.audit.retentionMonths | quote }}}
             - {name: AUDIT_MAINTENANCE, value: {{ ternary "false" "true" .Values.auditRetention.enabled | quote }}}
             - {name: AUDIT_SPOOL_DIR, value: /var/cache/guardrail-gateway/audit-spool}

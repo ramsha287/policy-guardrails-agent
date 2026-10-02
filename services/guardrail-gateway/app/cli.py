@@ -265,6 +265,10 @@ def build_parser() -> argparse.ArgumentParser:
     cred = sub.add_parser("ai-gateway-credentials", help="create the redaction project + service key; print them")
     cred.add_argument("--project-service-url", default="http://project-service:8000")
     cred.add_argument("--project-name", default="guardrail-pii")
+    du = sub.add_parser("dev-user-token", help="development only: a user token for verification confirm")
+    du.add_argument("--user", required=True, help="the user_id the agent sends")
+    du.add_argument("--verification", default=None, help="the verification id (becomes the token's nonce)")
+    du.add_argument("--ttl", type=int, default=300)
     b = sub.add_parser("bootstrap-dev")
     b.add_argument("--write", required=True)
     b.add_argument(
@@ -278,6 +282,19 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "ai-gateway-credentials":  # talks to project-service only; no database
         creds = asyncio.run(ai_gateway_credentials(args.project_service_url, args.project_name))
         print("\n".join(f"{k}={v}" for k, v in creds.items()))
+        return 0
+    if args.command == "dev-user-token":  # no database
+        secret = os.environ.get("VERIFY_DEV_SECRET")
+        if not secret:
+            print("set VERIFY_DEV_SECRET (the same value the gateway uses)", file=sys.stderr)
+            return 2
+        if os.environ.get("GATEWAY_ENV", "dev") != "dev":
+            print("dev-user-token only works with GATEWAY_ENV=dev", file=sys.stderr)
+            return 2
+        from app.verify.user_token import mint_dev_token
+
+        aud = os.environ.get("VERIFY_OIDC_AUDIENCE") or "guardrail-dev"
+        print(mint_dev_token(secret, args.user, nonce=args.verification, audience=aud, ttl=args.ttl))
         return 0
     return asyncio.run(_main(args))
 

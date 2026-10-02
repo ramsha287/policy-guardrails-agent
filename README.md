@@ -204,8 +204,10 @@ dashboards, proxy mode, multi-arch images).
 
 **Phase 6 (in progress), contextual decisions:** sprint A adds agent-bound keys, deterministic
 action descriptors, session state, reason-coded risk, a decision table and hash-chained decision
-records. It runs in shadow mode by default. See
-[docs/contextual-decisions.md](docs/contextual-decisions.md).
+records. Sprint B adds verification (SQL dry run and user confirmation instead of always asking a
+reviewer), an OpenID AuthZEN decision API and decision events through a Postgres outbox. It runs
+in shadow mode by default. See [docs/contextual-decisions.md](docs/contextual-decisions.md), and
+[docs/testing-contextual-decisions.md](docs/testing-contextual-decisions.md) to check it works.
 
 **Guardrails today:** `ai-gateway-pii` (the AI Gateway) and the OPA policy checks. The next
 guardrails, such as prompt injection, toxicity and secrets, are not built yet. See

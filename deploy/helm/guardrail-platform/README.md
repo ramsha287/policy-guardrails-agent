@@ -23,6 +23,10 @@ helm upgrade --install guardrails deploy/helm/guardrail-platform -n guardrails -
 | `gateway.contextual.requireBoundKeys` | `false` | Refuse gateway keys not bound to one agent |
 | `gateway.contextual.internalDomains` | `""` | Comma-separated internal domains for destination checks |
 | `gateway.contextual.riskConfig` | `{}` | Risk weight/limit overrides (`RISK_CONFIG_JSON`) |
+| `gateway.verification.oidc*` | `""` | Issuer, audience and JWKS URL for user confirmation ([verification](../../../docs/contextual-decisions.md#verification)) |
+| `gateway.verification.sqlDryRun` | `false` | SQL dry run; read-replica DSNs in the Secret key `VERIFY_SQL_DRY_RUN` |
+| `gateway.events.sinks` | `""` | Decision events: `redis`, `webhook` or both ([events](../../../docs/contextual-decisions.md#decision-events)) |
+| `gateway.events.webhookUrl` | `""` | Webhook sink URL; signed with the Secret key `OUTBOX_WEBHOOK_SECRET` |
 | `gateway.proxy.*` | off | OpenAI-compatible `/v1/chat/completions` with the guardrails applied |
 | `gateway.configSource` | `control_plane` | Or `file` with `gateway.snapshot` |
 | `controlPlane.enabled` | `true` | `false` for gateway-only releases (other environments) |
