@@ -291,7 +291,7 @@ class PgStore:
         q = (
             select(m.Snapshot)
             .where(m.Snapshot.environment == environment)
-            .order_by(m.Snapshot.published_at.desc())
+            .order_by(m.Snapshot.published_at.desc(), m.Snapshot.version.desc())  # sequence breaks ties
             .limit(limit)
         )
         async with self._s() as s:

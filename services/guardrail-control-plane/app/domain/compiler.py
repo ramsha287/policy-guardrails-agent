@@ -13,6 +13,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 from dataclasses import dataclass, field
+from datetime import datetime
 
 from jsonschema import Draft202012Validator
 from jsonschema.exceptions import SchemaError
@@ -152,7 +153,16 @@ def build_catalog(
             by_tenant[m.tenant_id].modifiers.append(CatalogModifier(kind=m.kind, value=m.value, delta=m.delta))
     doc = CatalogDoc(version="pending", tenants=list(by_tenant.values()))
     digest = content_hash(doc, {"version", "published_at"})
-    return doc.model_copy(update={"version": f"catalog-{now.strftime('%Y%m%d%H%M%S')}-{digest[:8]}"})
+    return doc.model_copy(update={"version": catalog_version(now, digest)})
+
+
+def catalog_version(published_at: datetime, digest: str) -> str:
+    """e.g. catalog-20261002102521872653-f2d3c5d0: publish time (to the microsecond) + content hash.
+
+    The hash alone repeats when content returns to an earlier state (bind then unbind a key), so
+    the publisher keeps publish times strictly increasing to keep versions unique.
+    """
+    return f"catalog-{published_at.strftime('%Y%m%d%H%M%S%f')}-{digest[:8]}"
 
 
 def catalog_content_hash(doc: CatalogDoc) -> str:

@@ -12,7 +12,7 @@ from collections.abc import Sequence
 from datetime import datetime, timedelta
 from typing import Any
 
-from ..domain.compiler import build_catalog, catalog_content_hash, etag
+from ..domain.compiler import build_catalog, catalog_content_hash, catalog_version, etag
 from ..domain.rbac import Permission, Principal
 from ..domain.records import (
     ActionRecord,
@@ -63,9 +63,16 @@ class CatalogService:
         current = await self.store.current_catalog()
         if current is not None and current.content_hash == digest:
             return current
-        doc = doc.model_copy(update={"published_at": utcnow()})
+        published_at = utcnow()
+        if current is not None and published_at <= current.published_at:  # coarse clocks (Windows)
+            published_at = current.published_at + timedelta(microseconds=1)
+        doc = doc.model_copy(update={"version": catalog_version(published_at, digest), "published_at": published_at})
         record = CatalogRecord(
-            version=doc.version, document=doc.model_dump(mode="json"), etag=etag(digest), content_hash=digest
+            version=doc.version,
+            document=doc.model_dump(mode="json"),
+            etag=etag(digest),
+            content_hash=digest,
+            published_at=published_at,
         )
         await self.store.add_catalog(record)
         await self.ctx.events.publish(CATALOG_CHANNEL, {"version": record.version})
