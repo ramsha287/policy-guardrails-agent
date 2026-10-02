@@ -522,6 +522,17 @@ async def test_tenant_diff_hides_the_other_tenants_side():
     assert d["details"]["moved"]["working"]["scope_id"] == "acme"
 
 
+async def test_catalog_versions_stay_unique_when_content_returns_to_an_earlier_state():
+    ctx, store, _ = make_ctx()
+    cat = CatalogService(ctx)
+    await cat.create_tenant(ALICE, "acme", "Acme")
+    before = await store.current_catalog()
+    key, _ = await cat.create_api_key(ALICE, "acme", "short-lived")
+    await cat.revoke_api_key(ALICE, "acme", key.id)  # same content as `before`, within the same second
+    after = await store.current_catalog()
+    assert after.content_hash == before.content_hash and after.version != before.version
+
+
 async def test_api_keys_can_be_bound_to_one_agent():
     ctx, store, _ = make_ctx()
     cat = CatalogService(ctx)

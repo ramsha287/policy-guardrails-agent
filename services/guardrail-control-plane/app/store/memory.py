@@ -195,7 +195,9 @@ class MemoryStore:
 
     async def list_snapshots(self, environment, limit=50):
         items = [s for s in self.snapshots.values() if s.environment == environment]
-        return [_copy(s) for s in sorted(items, key=lambda s: s.published_at, reverse=True)[:limit]]
+        # the version's zero-padded sequence breaks ties between publishes with the same timestamp
+        ordered = sorted(items, key=lambda s: (s.published_at, s.version), reverse=True)
+        return [_copy(s) for s in ordered[:limit]]
 
     async def count_snapshots(self, environment):
         return sum(1 for s in self.snapshots.values() if s.environment == environment)
