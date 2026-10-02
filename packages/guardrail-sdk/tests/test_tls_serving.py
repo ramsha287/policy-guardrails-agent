@@ -3,6 +3,7 @@
 import asyncio
 import datetime as dt
 import ipaddress
+import os
 import socket
 
 import httpx
@@ -216,7 +217,8 @@ def test_dev_certs_work_for_mtls(tmp_path):
     cert = x509.load_pem_x509_certificate((tmp_path / "guardrail-gateway.crt").read_bytes())
     sans = cert.extensions.get_extension_for_class(x509.SubjectAlternativeName).value
     assert "guardrail-gateway" in sans.get_values_for_type(x509.DNSName)
-    assert oct((tmp_path / "guardrail-gateway.key").stat().st_mode)[-3:] == "600"
+    if os.name != "nt":  # Windows has no POSIX modes; chmod only toggles read-only
+        assert oct((tmp_path / "guardrail-gateway.key").stat().st_mode)[-3:] == "600"
     # adding a service later reuses the CA
     ca_before = (tmp_path / "ca.crt").read_bytes()
     generate(tmp_path, ["guardrail-control-plane", "guardrail-gateway", "opa"])
