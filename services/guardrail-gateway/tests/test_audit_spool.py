@@ -16,6 +16,19 @@ def event(n):
     }
 
 
+def test_order_holds_when_the_clock_does_not_move(tmp_path, monkeypatch):
+    """Coarse clocks (Windows) can return the same time for two appends; replay order must not
+    then depend on the random part of the file name, and a new spool keeps after old files."""
+    monkeypatch.setattr("app.audit.spool.time.time_ns", lambda: 1_000)
+    spool = AuditSpool(tmp_path)
+    for n in range(1, 6):
+        assert spool.append([event(n)])
+    later = AuditSpool(tmp_path)  # e.g. after a restart, with the files still waiting
+    assert later.append([event(6)])
+    back = [e["request_id"] for f in later.files() for e in later.read(f)]
+    assert back == ["r1", "r2", "r3", "r4", "r5", "r6"]
+
+
 def test_round_trip_keeps_types_and_order(tmp_path):
     spool = AuditSpool(tmp_path)
     first, second = [event(1), event(2)], [event(3)]
