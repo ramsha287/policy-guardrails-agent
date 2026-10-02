@@ -9,7 +9,7 @@ from __future__ import annotations
 import hashlib
 import secrets
 from collections.abc import Sequence
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 
 from ..domain.compiler import build_catalog, catalog_content_hash, etag
@@ -23,12 +23,14 @@ from ..domain.records import (
     TenantRecord,
     utcnow,
 )
-from ..errors import NotFound
+from ..errors import NotFound, ValidationFailed
 from ..events import CATALOG_CHANNEL
 from ..store.base import Conflict
 from .context import Ctx
 
 GATEWAY_KEY_PREFIX = "gk_"
+BOUND_KEYS_CAPABILITY = "agent_bound_keys"  # reported in gateway heartbeats from 0.6
+BINDING_GATEWAY_WINDOW_MINUTES = 15  # gateways heard from this recently must support bound keys
 
 
 def hash_key(raw: str) -> str:
@@ -106,9 +108,13 @@ class CatalogService:
         environments: Sequence[str] | None = None,
         expires_at: datetime | None = None,
         rate_limit_per_minute: int | None = None,
+        agent_id: str | None = None,
     ) -> tuple[ApiKeyRecord, str]:
         p.require(Permission.CATALOG_WRITE, tenant_id)
         await self._tenant(tenant_id)
+        if agent_id is not None:
+            await self._require_agent(tenant_id, agent_id)
+            await self._require_binding_support()
         raw = GATEWAY_KEY_PREFIX + secrets.token_urlsafe(32)
         key = ApiKeyRecord(
             tenant_id=tenant_id,
@@ -119,9 +125,12 @@ class CatalogService:
             environments=list(environments) if environments is not None else None,  # type: ignore[arg-type]
             expires_at=expires_at,
             rate_limit_per_minute=rate_limit_per_minute,
+            agent_id=agent_id,
         )
         await self.store.add_api_key(key)
-        await self.ctx.log("api_key", key.id, "create", p.actor, after={"tenant_id": tenant_id, "name": name})
+        await self.ctx.log(
+            "api_key", key.id, "create", p.actor, after={"tenant_id": tenant_id, "name": name, "agent_id": agent_id}
+        )
         await self.publish()
         return key, raw
 
@@ -165,6 +174,52 @@ class CatalogService:
             p.actor,
             before={"rate_limit_per_minute": key.rate_limit_per_minute},
             after={"rate_limit_per_minute": rate_limit_per_minute},
+        )
+        await self.publish()
+        return updated
+
+    async def _require_binding_support(self) -> None:
+        """Gateways older than 0.6 reject a catalog that contains a bound key (and then keep serving
+        their last good catalog, missing later revocations). Refuse to bind while one is live."""
+        recent = utcnow() - timedelta(minutes=BINDING_GATEWAY_WINDOW_MINUTES)
+        old = [
+            g.gateway_id
+            for g in await self.store.list_gateways()
+            if g.last_seen >= recent and BOUND_KEYS_CAPABILITY not in g.capabilities
+        ]
+        if old:
+            raise ValidationFailed(
+                "upgrade these gateways to 0.6 or later before binding keys to agents "
+                f"(older gateways can't read bound keys): {', '.join(sorted(old))}"
+            )
+
+    async def _require_agent(self, tenant_id: str, agent_id: str) -> None:
+        if await self.store.get_agent(tenant_id, agent_id) is None:
+            raise ValidationFailed(f"agent {agent_id!r} is not registered in tenant {tenant_id!r}; register it first")
+
+    async def bind_api_key(self, p: Principal, tenant_id: str, key_id: str, agent_id: str | None) -> ApiKeyRecord:
+        """Bind a key to one agent (identity assurance A1), or unbind it (None, back to A0).
+
+        Binding is how a legacy key is upgraded; unbinding weakens identity, so it is logged as such.
+        """
+        p.require(Permission.CATALOG_WRITE, tenant_id)
+        key = await self.store.get_api_key(key_id)
+        if key is None or key.tenant_id != tenant_id:
+            raise NotFound(f"api key {key_id} not found")
+        if not key.is_active:
+            raise ValidationFailed("this key is revoked")
+        if agent_id is not None:
+            await self._require_agent(tenant_id, agent_id)
+            await self._require_binding_support()
+        updated = key.model_copy(update={"agent_id": agent_id})
+        await self.store.put_api_key(updated)
+        await self.ctx.log(
+            "api_key",
+            key_id,
+            "bind" if agent_id else "unbind",
+            p.actor,
+            before={"agent_id": key.agent_id},
+            after={"agent_id": agent_id},
         )
         await self.publish()
         return updated

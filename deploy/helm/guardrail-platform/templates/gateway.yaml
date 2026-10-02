@@ -129,6 +129,12 @@ spec:
             - {name: MAX_BODY_BYTES, value: {{ $g.maxBodyBytes | int64 | quote }}}
             - {name: DEFAULT_GUARDRAIL_TIMEOUT_MS, value: {{ $g.defaultGuardrailTimeoutMs | quote }}}
             - {name: GUARD_RATE_LIMIT_PER_MINUTE, value: {{ $perReplica | int64 | quote }}}
+            - {name: RISK_MODE, value: {{ $g.contextual.riskMode | quote }}}
+            - {name: REQUIRE_BOUND_KEYS, value: {{ $g.contextual.requireBoundKeys | toString | quote }}}
+            - {name: INTERNAL_DOMAINS, value: {{ $g.contextual.internalDomains | quote }}}
+            {{- if $g.contextual.riskConfig }}
+            - {name: RISK_CONFIG_JSON, value: {{ $g.contextual.riskConfig | toJson | quote }}}
+            {{- end }}
             - {name: AUDIT_RETENTION_MONTHS, value: {{ $g.audit.retentionMonths | quote }}}
             - {name: AUDIT_MAINTENANCE, value: {{ ternary "false" "true" .Values.auditRetention.enabled | quote }}}
             - {name: AUDIT_SPOOL_DIR, value: /var/cache/guardrail-gateway/audit-spool}

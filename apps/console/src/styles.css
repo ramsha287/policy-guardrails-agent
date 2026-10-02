@@ -817,6 +817,10 @@ code {
   background: var(--surface-2);
 }
 
+.nowrap {
+  white-space: nowrap;
+}
+
 .table .num {
   text-align: right;
 }

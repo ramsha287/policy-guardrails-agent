@@ -69,8 +69,8 @@ const state = {
     { id: "acme", name: "Acme Corp", status: "active", created_at: ago(60 * 24 * 10) },
   ],
   apiKeys: [
-    { id: randomUUID(), tenant_id: "demo", name: "research-agent", prefix: "gk_3f9a1c2d", scopes: ["guard:invoke"], environments: null, is_active: true, expires_at: null, created_at: ago(60 * 24 * 30), revoked_at: null },
-    { id: randomUUID(), tenant_id: "acme", name: "support-bot", prefix: "gk_77ab01ce", scopes: ["guard:invoke"], environments: ["dev", "staging"], is_active: true, expires_at: null, created_at: ago(60 * 24 * 5), revoked_at: null },
+    { id: randomUUID(), tenant_id: "demo", name: "research-agent", prefix: "gk_3f9a1c2d", scopes: ["guard:invoke"], environments: null, is_active: true, expires_at: null, created_at: ago(60 * 24 * 30), revoked_at: null, agent_id: "research-agent" },
+    { id: randomUUID(), tenant_id: "acme", name: "support-bot", prefix: "gk_77ab01ce", scopes: ["guard:invoke"], environments: ["dev", "staging"], is_active: true, expires_at: null, created_at: ago(60 * 24 * 5), revoked_at: null, agent_id: null },
   ],
   agents: [
     { tenant_id: "demo", agent_id: "research-agent", base_trust_score: 80, allowed_tools: ["search.*", "crm.read"], owner: "data-team", updated_at: ago(600) },
@@ -502,7 +502,10 @@ route("GET", "/tenants/:t/api-keys", ({ p, params }) => (p.require("read", param
 route("POST", "/tenants/:t/api-keys", ({ p, params, body }) => {
   p.require("catalog:write", params.t);
   const raw = `gk_${randomUUID().replace(/-/g, "")}`;
-  const k = { id: randomUUID(), tenant_id: params.t, name: body.name, prefix: raw.slice(0, 11), scopes: body.scopes ?? ["guard:invoke"], environments: body.environments ?? null, is_active: true, expires_at: body.expires_at ?? null, created_at: now(), revoked_at: null, rate_limit_per_minute: body.rate_limit_per_minute ?? null };
+  if (body.agent_id && !state.agents.some((a) => a.tenant_id === params.t && a.agent_id === body.agent_id)) {
+    throw new HttpError(422, `agent '${body.agent_id}' is not registered in tenant '${params.t}'; register it first`);
+  }
+  const k = { id: randomUUID(), tenant_id: params.t, name: body.name, prefix: raw.slice(0, 11), scopes: body.scopes ?? ["guard:invoke"], environments: body.environments ?? null, is_active: true, expires_at: body.expires_at ?? null, created_at: now(), revoked_at: null, rate_limit_per_minute: body.rate_limit_per_minute ?? null, agent_id: body.agent_id ?? null };
   state.apiKeys.push(k);
   log("api_key", k.id, "create", p.actor);
   return { ...k, key: raw, note: "Store this key now; only its hash is kept." };
@@ -511,8 +514,18 @@ route("PATCH", "/tenants/:t/api-keys/:id", ({ p, params, body }) => {
   p.require("catalog:write", params.t);
   const k = state.apiKeys.find((x) => x.id === params.id && x.tenant_id === params.t);
   if (!k) throw new HttpError(404, "key not found");
-  k.rate_limit_per_minute = body?.rate_limit_per_minute ?? null;
-  log("api_key", k.id, "rate_limit", p.actor, { rate_limit_per_minute: k.rate_limit_per_minute });
+  const fields = body && Object.keys(body).length ? Object.keys(body) : ["rate_limit_per_minute"];
+  if (fields.includes("rate_limit_per_minute")) {
+    k.rate_limit_per_minute = body?.rate_limit_per_minute ?? null;
+    log("api_key", k.id, "rate_limit", p.actor, { rate_limit_per_minute: k.rate_limit_per_minute });
+  }
+  if (fields.includes("agent_id")) {
+    if (body.agent_id && !state.agents.some((a) => a.tenant_id === params.t && a.agent_id === body.agent_id)) {
+      throw new HttpError(422, `agent '${body.agent_id}' is not registered in tenant '${params.t}'; register it first`);
+    }
+    k.agent_id = body.agent_id ?? null;
+    log("api_key", k.id, k.agent_id ? "bind" : "unbind", p.actor, { agent_id: k.agent_id });
+  }
   return k;
 });
 route("DELETE", "/tenants/:t/api-keys/:id", ({ p, params }) => {

@@ -69,7 +69,19 @@ async def _import_gateway(ctx: Ctx, snapshots: list[Path], plugin_dirs: list[Pat
                 if await store.get_tenant(row["id"]) is None:
                     await store.put_tenant(TenantRecord(id=row["id"], name=row["name"], status=row["status"]))
                     report["tenants"] += 1
-            q = "SELECT id, tenant_id, name, key_hash, prefix, scopes, is_active, expires_at FROM guardrail.api_keys"
+            has_agent = (
+                await s.execute(
+                    text(
+                        "SELECT 1 FROM information_schema.columns WHERE table_schema = 'guardrail' "
+                        "AND table_name = 'api_keys' AND column_name = 'agent_id'"
+                    )
+                )
+            ).first() is not None  # gateway migration 0002 adds it
+            q = (
+                "SELECT id, tenant_id, name, key_hash, prefix, scopes, is_active, expires_at"
+                + (", agent_id" if has_agent else "")
+                + " FROM guardrail.api_keys"
+            )
             for row in (await s.execute(text(q))).mappings():
                 await catalog.import_api_key(
                     SYSTEM,
@@ -82,6 +94,7 @@ async def _import_gateway(ctx: Ctx, snapshots: list[Path], plugin_dirs: list[Pat
                         scopes=list(row["scopes"]),
                         is_active=row["is_active"],
                         expires_at=row["expires_at"],
+                        agent_id=row.get("agent_id"),
                     ),
                 )
                 report["api_keys"] += 1

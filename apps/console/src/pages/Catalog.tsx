@@ -230,6 +230,7 @@ function KeysTab({ tenant }: { tenant: string }) {
   const [created, setCreated] = useState<CreatedApiKey | null>(null);
   const [revoking, setRevoking] = useState<ApiKey | null>(null);
   const [limiting, setLimiting] = useState<ApiKey | null>(null);
+  const [binding, setBinding] = useState<ApiKey | null>(null);
   const revoke = useAction(async (k: ApiKey) => {
     await api.revokeApiKey(tenant, k.id);
     toast("good", `Revoked ${k.name}. Gateways reject it within seconds.`);
@@ -250,7 +251,7 @@ function KeysTab({ tenant }: { tenant: string }) {
       {keys.data === undefined ? (
         <Loading />
       ) : (
-        <TabTable head={["Name", "Environments", "Rate limit", "Status", "Created", ""]} empty="No API keys">
+        <TabTable head={["Name", "Agent", "Limits", "Status", ""]} empty="No API keys">
           {keys.data.map((k) => {
             const st = keyState(k);
             return (
@@ -261,16 +262,34 @@ function KeysTab({ tenant }: { tenant: string }) {
                     <Mono>{k.prefix}…</Mono> · {k.scopes.join(", ")}
                   </span>
                 </td>
-                <td>{k.environments ? k.environments.join(", ") : "all"}</td>
-                <td>{rateLabel(k.rate_limit_per_minute)}</td>
+                <td>
+                  {k.agent_id ? (
+                    <>
+                      <span className="nowrap">{k.agent_id}</span>
+                      <span className="cell-sub">bound (A1)</span>
+                    </>
+                  ) : (
+                    <Badge tone="warning">any agent (A0)</Badge>
+                  )}
+                </td>
+                <td>
+                  {k.environments ? k.environments.join(", ") : "all environments"}
+                  <span className="cell-sub">rate: {rateLabel(k.rate_limit_per_minute)}</span>
+                </td>
                 <td>
                   <Badge tone={st.tone}>{st.label}</Badge>
-                  {k.expires_at && st.label === "active" && <span className="cell-sub">expires {relativeTime(k.expires_at)}</span>}
+                  <span className="cell-sub">
+                    {k.expires_at && st.label === "active"
+                      ? `expires ${relativeTime(k.expires_at)}`
+                      : `created ${dateTime(k.created_at)}`}
+                  </span>
                 </td>
-                <td>{dateTime(k.created_at)}</td>
                 <td>
                   {editable && st.label === "active" && (
                     <div className="cell-actions">
+                      <Button size="sm" variant="ghost" onClick={() => setBinding(k)}>
+                        {k.agent_id ? "Agent" : "Bind"}
+                      </Button>
                       <Button size="sm" variant="ghost" onClick={() => setLimiting(k)}>
                         Limit
                       </Button>
@@ -309,6 +328,23 @@ function KeysTab({ tenant }: { tenant: string }) {
           </div>
         )}
       </Dialog>
+      {binding && (
+        <BindAgentDialog
+          tenant={tenant}
+          apiKey={binding}
+          onClose={() => setBinding(null)}
+          onDone={async (agentId) => {
+            setBinding(null);
+            toast(
+              "good",
+              agentId
+                ? `Bound to ${agentId}. Gateways reject other agent_ids for this key within seconds.`
+                : "Unbound: this key can act as any agent again (A0).",
+            );
+            await keys.reload();
+          }}
+        />
+      )}
       {limiting && (
         <RateLimitDialog
           tenant={tenant}
@@ -355,10 +391,14 @@ function CreateKeyDialog({
   const [envs, setEnvs] = useState<Environment[]>([]);
   const [expires, setExpires] = useState("");
   const [limit, setLimit] = useState("");
+  const agents = useResource(() => api.agents(tenant), [api, tenant]);
+  const [agent, setAgent] = useState<string | null>(null); // null = not chosen yet -> first agent
+  const chosenAgent = agent ?? agents.data?.[0]?.agent_id ?? "";
   const create = useAction(async () =>
     onDone(
       await api.createApiKey(tenant, {
         name: name.trim(),
+        agent_id: chosenAgent || null,
         environments: envs.length > 0 ? envs : null,
         expires_at: expires ? new Date(`${expires}T23:59:59`).toISOString() : null,
         rate_limit_per_minute: limit === "" ? null : Number(limit),
@@ -373,7 +413,12 @@ function CreateKeyDialog({
       footer={
         <>
           <Button onClick={onClose}>Cancel</Button>
-          <Button variant="primary" busy={create.busy} disabled={!name.trim()} onClick={() => void create.run()}>
+          <Button
+            variant="primary"
+            busy={create.busy}
+            disabled={!name.trim() || agents.data === undefined}
+            onClick={() => void create.run()}
+          >
             Create key
           </Button>
         </>
@@ -382,6 +427,7 @@ function CreateKeyDialog({
       <Field label="Name" htmlFor="k-name" hint="Usually the agent that will use it">
         <input id="k-name" className="input" value={name} maxLength={100} onChange={(e) => setName(e.target.value)} />
       </Field>
+      <AgentSelect id="k-agent" agents={agents.data} value={chosenAgent} onChange={setAgent} />
       <Field label="Environments" hint="Leave all unticked to allow every environment">
         <div>
           {ENVIRONMENTS.map((e) => (
@@ -402,7 +448,82 @@ function CreateKeyDialog({
       <Field label="Rate limit (requests per minute)" htmlFor="k-limit" hint="Empty = the gateway default; 0 = unlimited.">
         <input id="k-limit" className="input" type="number" min={0} value={limit} onChange={(e) => setLimit(e.target.value)} />
       </Field>
-      <ErrorBanner error={create.error} />
+      <ErrorBanner error={agents.error ?? create.error} />
+    </Dialog>
+  );
+}
+
+function AgentSelect({
+  id,
+  agents,
+  value,
+  onChange,
+}: {
+  id: string;
+  agents: Agent[] | undefined;
+  value: string;
+  onChange: (v: string) => void;
+}) {
+  return (
+    <Field
+      label="Agent"
+      htmlFor={id}
+      hint={
+        value
+          ? "The key can only act as this agent: a request claiming another agent_id is denied (identity assurance A1)."
+          : "Any agent: the gateway has to trust the agent_id in each request (A0). Not recommended; production can refuse these keys."
+      }
+    >
+      <select id={id} className="input" value={value} onChange={(e) => onChange(e.target.value)}>
+        {(agents ?? []).map((a) => (
+          <option key={a.agent_id} value={a.agent_id}>
+            {a.agent_id}
+          </option>
+        ))}
+        <option value="">Any agent (legacy, A0)</option>
+      </select>
+    </Field>
+  );
+}
+
+function BindAgentDialog({
+  tenant,
+  apiKey,
+  onClose,
+  onDone,
+}: {
+  tenant: string;
+  apiKey: ApiKey;
+  onClose: () => void;
+  onDone: (agentId: string | null) => Promise<void>;
+}) {
+  const { api } = useSession();
+  const agents = useResource(() => api.agents(tenant), [api, tenant]);
+  const [value, setValue] = useState<string | null>(apiKey.agent_id ?? null);
+  const chosen = value ?? agents.data?.[0]?.agent_id ?? "";
+  const save = useAction(async () => {
+    await api.bindApiKey(tenant, apiKey.id, chosen || null);
+    await onDone(chosen || null);
+  });
+  return (
+    <Dialog
+      open
+      title={`Agent for ${apiKey.name}`}
+      onClose={onClose}
+      footer={
+        <>
+          <Button onClick={onClose}>Cancel</Button>
+          <Button variant="primary" busy={save.busy} disabled={agents.data === undefined} onClick={() => void save.run()}>
+            Save
+          </Button>
+        </>
+      }
+    >
+      <AgentSelect id="b-agent" agents={agents.data} value={chosen} onChange={setValue} />
+      {!chosen && apiKey.agent_id && (
+        <Notice tone="warning">Unbinding lets anyone holding this key claim to be any agent in {tenant}.</Notice>
+      )}
+      <ErrorBanner error={agents.error ?? save.error} />
     </Dialog>
   );
 }

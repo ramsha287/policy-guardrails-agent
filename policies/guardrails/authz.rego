@@ -8,7 +8,13 @@
 #   "context": SecurityContext (without arguments),
 #   "agent": {"known": bool, "allowed_tools": [string]},
 #   "action_known": bool,
-#   "tool_name": string | null
+#   "tool_name": string | null,
+#   # Optional (gateway 0.6+; absent on older gateways, so rules must not require them):
+#   "identity": {"assurance": "A0" | "A1", "key_agent_id": string | null},
+#   "descriptor": {"kind", "verb", "target", "tables", "columns", "rows_requested", "has_filter",
+#                  "destination", "destination_host", ...}   # parsed action, never values
+#   "session": {"labels": [string], "steps": int, "denials": int, "first_seen_target": bool | null},
+#   "risk_v2": {"score": int, "band": "low" | "elevated" | "high" | "critical", "trust": int, "codes": [string]}
 # }
 package guardrails.authz
 

@@ -34,6 +34,8 @@ from guardrail_sdk.documents import CatalogDoc
 
 logger = logging.getLogger(__name__)
 
+GATEWAY_CAPABILITIES = ("agent_bound_keys", "risk_v2", "decision_records_v2")
+
 SNAPSHOT_CHANNEL = "guardrail:snapshot.published"
 CATALOG_CHANNEL = "guardrail:catalog.published"
 
@@ -85,7 +87,9 @@ class CatalogHolder:
                     continue
                 if k.environments is not None and self._env not in k.environments:
                     continue
-                keys[k.key_hash] = Principal(k.id, t.id, k.name, frozenset(k.scopes), k.rate_limit_per_minute)
+                keys[k.key_hash] = Principal(
+                    k.id, t.id, k.name, frozenset(k.scopes), k.rate_limit_per_minute, agent_id=k.agent_id
+                )
         self.doc, self._keys, self._tenants, self.last_error = doc, keys, tenants, None
         logger.info("Catalog %s loaded: %d tenant(s), %d key(s)", doc.version, len(tenants), len(keys))
         return True
@@ -275,6 +279,8 @@ class ControlPlaneSync:
             "manifests": [m.model_dump(mode="json") for m in self.registry.manifests.values()],
             "snapshot_version": self.snapshots.version,
             "catalog_version": self.catalog.version,
+            # Lets the control plane refuse to publish features this gateway can't read yet.
+            "capabilities": list(GATEWAY_CAPABILITIES),
             "last_error": "; ".join(filter(None, [self.snapshots.last_error, self.catalog.last_error])) or None,
         }
 

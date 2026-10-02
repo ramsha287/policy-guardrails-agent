@@ -202,6 +202,11 @@ guardrail, retrieval and tool stages, the control plane with human review, and h
 production (console, Helm chart, mTLS, SOPS secrets, rate limits, durable audit, alerts and
 dashboards, proxy mode, multi-arch images).
 
+**Phase 6 (in progress), contextual decisions:** sprint A adds agent-bound keys, deterministic
+action descriptors, session state, reason-coded risk, a decision table and hash-chained decision
+records. It runs in shadow mode by default. See
+[docs/contextual-decisions.md](docs/contextual-decisions.md).
+
 **Guardrails today:** `ai-gateway-pii` (the AI Gateway) and the OPA policy checks. The next
 guardrails, such as prompt injection, toxicity and secrets, are not built yet. See
 [docs/guardrails.md](docs/guardrails.md#guardrails-you-can-add).

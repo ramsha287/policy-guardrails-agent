@@ -55,6 +55,7 @@ class ApiKey(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     rate_limit_per_minute: Mapped[int | None] = mapped_column(Integer)
+    agent_id: Mapped[str | None] = mapped_column(String(128))
 
 
 class Agent(Base):
@@ -244,6 +245,7 @@ class Gateway(Base):
     last_error: Mapped[str | None] = mapped_column(Text)
     installed: Mapped[list[str]] = mapped_column(ARRAY(String))
     last_seen: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    capabilities: Mapped[list[str]] = mapped_column(ARRAY(String), server_default="{}")
 
 
 class Change(Base):

@@ -520,3 +520,50 @@ async def test_tenant_diff_hides_the_other_tenants_side():
     assert d["changed"] == ["moved"]
     assert d["details"]["moved"]["live"] is None  # globex's config is not shown to acme
     assert d["details"]["moved"]["working"]["scope_id"] == "acme"
+
+
+async def test_api_keys_can_be_bound_to_one_agent():
+    ctx, store, _ = make_ctx()
+    cat = CatalogService(ctx)
+    await cat.create_tenant(ALICE, "acme", "Acme")
+    with pytest.raises(ValidationFailed):  # the agent must be registered first
+        await cat.create_api_key(ALICE, "acme", "bot", agent_id="support-bot")
+    await cat.put_agent(ALICE, "acme", "support-bot", 70, ["*"])
+    bound, _ = await cat.create_api_key(ALICE, "acme", "bot", agent_id="support-bot")
+    legacy, _ = await cat.create_api_key(ALICE, "acme", "legacy")
+    doc, _ = await cat.current_document()
+    keys = {k.name: k for k in CatalogDoc.model_validate(doc).tenants[0].api_keys}
+    assert keys["bot"].agent_id == "support-bot" and keys["legacy"].agent_id is None
+    published = {k["name"]: k for k in doc["tenants"][0]["api_keys"]}
+    assert "agent_id" not in published["legacy"]  # older gateways keep loading the catalog
+
+    await cat.bind_api_key(ACME_ADMIN, "acme", legacy.id, "support-bot")  # upgrade a legacy key to A1
+    doc, _ = await cat.current_document()
+    assert all(k.agent_id == "support-bot" for k in CatalogDoc.model_validate(doc).tenants[0].api_keys)
+    await cat.bind_api_key(ALICE, "acme", legacy.id, None)
+    with pytest.raises(ValidationFailed):
+        await cat.bind_api_key(ALICE, "acme", legacy.id, "ghost")
+    with pytest.raises(Forbidden):
+        await cat.bind_api_key(VIEWER, "acme", legacy.id, "support-bot")
+    with pytest.raises(NotFound):
+        await cat.bind_api_key(ALICE, "other", legacy.id, "support-bot")
+    actions = [c.action for c in await store.list_changes("api_key", legacy.id)]
+    assert {"bind", "unbind"} <= set(actions)
+
+
+async def test_binding_waits_until_every_live_gateway_supports_it():
+    ctx, _, _ = make_ctx()
+    cat, gws = CatalogService(ctx), GatewayService(ctx)
+    await cat.create_tenant(ALICE, "acme", "Acme")
+    await cat.put_agent(ALICE, "acme", "bot", 70, ["*"])
+    common = dict(environment="dev", manifests=[], snapshot_version=None, catalog_version=None, last_error=None)
+    await gws.heartbeat(gateway_id="gw-old", **common)  # 0.5 gateway: reports no capabilities
+    await gws.heartbeat(gateway_id="gw-new", capabilities=["agent_bound_keys"], **common)
+    with pytest.raises(ValidationFailed, match="gw-old"):
+        await cat.create_api_key(ALICE, "acme", "bot", agent_id="bot")
+    key, _ = await cat.create_api_key(ALICE, "acme", "legacy")  # unbound keys are fine meanwhile
+    await gws.heartbeat(gateway_id="gw-old", capabilities=["agent_bound_keys"], **common)  # upgraded
+    await cat.bind_api_key(ALICE, "acme", key.id, "bot")
+    await cat.revoke_api_key(ALICE, "acme", key.id)
+    with pytest.raises(ValidationFailed, match="revoked"):
+        await cat.bind_api_key(ALICE, "acme", key.id, "bot")

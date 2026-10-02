@@ -8,7 +8,7 @@ from ..container import Container
 from ..deps import container
 
 router = APIRouter(tags=["ops"])
-SERVICE_VERSION = "0.5.0"
+SERVICE_VERSION = "0.6.0"
 
 
 @router.get("/health")

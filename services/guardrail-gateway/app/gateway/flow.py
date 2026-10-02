@@ -18,7 +18,20 @@ from app.engine.pipeline import StageOutcome
 from app.gateway.auth import Principal
 from app.gateway.normalize import normalize_payload
 from app.observability import OPA_DENY, REQUEST_LATENCY, REQUESTS, span
-from guardrail_sdk import Decision, GuardPayloadIn, GuardRequest, GuardResponse, Payload, PolicyOutcome, Stage
+from app.policy.opa import PolicyDecision
+from app.risk.contextual import ContextualDecisions, Prepared
+from app.risk.decision import TableResult
+from guardrail_sdk import (
+    Decision,
+    GuardPayloadIn,
+    GuardRequest,
+    GuardResponse,
+    Payload,
+    PolicyOutcome,
+    RiskAssessment,
+    RiskSignal,
+    Stage,
+)
 
 if TYPE_CHECKING:  # app.services imports the database layer
     from app.services import Services
@@ -59,32 +72,98 @@ async def run_stage(
     except ValidationError as exc:
         raise GuardError(422, exc.errors()[0]["msg"]) from exc
 
+    ctxd: ContextualDecisions | None = getattr(svc, "contextual", None)
     with span("gateway.guard", stage=stage.value, tenant_id=principal.tenant_id, agent_id=body.agent_id):
         built = await svc.contexts.build(principal=principal, req=body, request_id=request_id, trace_id=trace_id)
         ctx = built.context
         tool_name = payload.tool_call.name if payload.tool_call else None
+        violation = ctxd.identity_violation(principal, body) if ctxd else None
+        prepared = None
+        if ctxd is not None and violation is None:
+            prepared = await ctxd.prepare(
+                principal=principal,
+                body=body,
+                stage=stage,
+                payload=payload,
+                environment=ctx.environment,
+                inherent_risk=ctx.risk_score,
+                base_trust=ctx.trust_score,
+            )
 
-        with span("opa.evaluate", stage=stage.value) as s:
-            policy = await svc.policy.evaluate(built.policy_input(stage, tool_name))
-            if s is not None:
-                s.set_attribute("allow", policy.allow)
-
-        if not policy.allow:
+        table: TableResult | None = None
+        if violation is not None:
+            # Identity binding is enforced in every mode: nothing else runs for a mismatched key.
             OPA_DENY.labels(stage.value).inc()
-            outcome = StageOutcome(Decision.BLOCK, f"policy denied: {policy.reason}", ctx.risk_score, None)
+            policy = PolicyDecision(False, violation.reason)
+            outcome = StageOutcome(Decision.BLOCK, f"identity check failed: {violation.reason}", ctx.risk_score, None)
             status = 403
         else:
-            outcome = await svc.engine.run(snapshot, stage, ctx, payload, policy.obligations)
-            status = 200
+            policy_input = built.policy_input(stage, tool_name)
+            policy_input["identity"] = {"assurance": principal.assurance, "key_agent_id": principal.agent_id}
+            if prepared is not None:
+                policy_input.update(prepared.policy_input())
+            with span("opa.evaluate", stage=stage.value) as s:
+                policy = await svc.policy.evaluate(policy_input)
+                if s is not None:
+                    s.set_attribute("allow", policy.allow)
+
+            if not policy.allow:
+                OPA_DENY.labels(stage.value).inc()
+                outcome = StageOutcome(Decision.BLOCK, f"policy denied: {policy.reason}", ctx.risk_score, None)
+                status = 403
+            else:
+                outcome = await svc.engine.run(snapshot, stage, ctx, payload, policy.obligations)
+                status = 200
+            if ctxd is not None and prepared is not None:
+                table = ctxd.decide(
+                    prepared,
+                    policy_allow=policy.allow,
+                    engine_decision=outcome.decision,
+                    accepts_obligations=bool(body.accepts_obligations),
+                )
+                if table is not None and ctxd.enforcing:
+                    outcome, status = _apply_table(table, outcome, status, prepared)
 
     escalation_id: str | None = None
     if outcome.decision == Decision.ESCALATE:
-        outcome, escalation_id = await hold_for_review(svc.control_plane, ctx, stage, outcome)
-        status = 202 if escalation_id else 200
+        outcome, escalation_id = await hold_for_review(
+            svc.control_plane, ctx, stage, outcome, source="gateway-risk" if _risk_held(table, ctxd) else None
+        )
+        status = 202 if escalation_id else (403 if _risk_held(table, ctxd) else 200)
+
+    if ctxd is not None and prepared is not None:
+        await ctxd.record(
+            prepared, principal=principal, body=body, stage=stage, payload=payload, final=outcome.decision
+        )
 
     latency_ms = round((time.perf_counter() - started) * 1000, 2)
     released = outcome.payload if outcome.decision in (Decision.ALLOW, Decision.MODIFY) else None
     out_payload = GuardPayloadIn.model_validate(released.model_dump(exclude={"stage"})) if released else None
+    assessment = prepared.assessment if prepared is not None else None
+    enforced_table = table if (table is not None and ctxd is not None and ctxd.enforcing) else None
+    if violation is not None:
+        outcome_name, reason_codes = "deny", [violation.code]
+    elif enforced_table is not None:
+        outcome_name = _final_outcome_name(enforced_table, outcome.decision)
+        merged: list[str] = [*enforced_table.reason_codes, *(assessment.codes if assessment else [])]
+        reason_codes = list(dict.fromkeys(merged))
+    else:
+        outcome_name = _legacy_outcome_name(outcome.decision)
+        reason_codes = list(assessment.codes) if assessment else []
+    obligations = enforced_table.obligations if (enforced_table and released) else {}
+    risk_out = (
+        RiskAssessment(
+            score=assessment.score,
+            band=assessment.band,
+            trust=assessment.trust,
+            confidence=assessment.confidence,
+            mode=ctxd.mode if ctxd else "off",
+            would_outcome=table.outcome if table else outcome_name,
+            signals=[RiskSignal(code=x.code, points=x.points, detail=x.detail) for x in assessment.signals],
+        )
+        if assessment is not None
+        else None
+    )
     response = GuardResponse(
         request_id=request_id,
         trace_id=trace_id,
@@ -98,6 +177,11 @@ async def run_stage(
         results=outcome.results,
         snapshot_version=snapshot.version,
         escalation_id=escalation_id,
+        outcome=outcome_name,
+        reason_codes=reason_codes,
+        obligations=obligations,
+        risk=risk_out,
+        assurance=principal.assurance,
     )
 
     svc.audit.submit(
@@ -124,8 +208,51 @@ async def run_stage(
             "snapshot_version": snapshot.version,
             "latency_ms": latency_ms,
             "usage_bytes": usage_bytes,
+            "outcome": outcome_name,
+            "reason_codes": reason_codes,
+            # The descriptor holds table/column names, hosts and row counts, never values.
+            "descriptor": prepared.descriptor.to_dict() if prepared is not None else None,
+            "risk": risk_out.model_dump(mode="json") if risk_out is not None else None,
+            "assurance": principal.assurance,
         }
     )
     REQUESTS.labels(stage.value, outcome.decision.value).inc()
     REQUEST_LATENCY.labels(stage.value).observe(latency_ms)
     return StageResult(status, response)
+
+
+def _legacy_outcome_name(decision: Decision) -> str:
+    return {Decision.ALLOW: "allow", Decision.MODIFY: "modify", Decision.ESCALATE: "hold", Decision.BLOCK: "deny"}[
+        decision
+    ]
+
+
+def _final_outcome_name(table: TableResult, final: Decision) -> str:
+    """The table's outcome, unless the review queue changed it (approved hold -> allow, failed -> deny)."""
+    if table.legacy == final or (table.outcome in ("allow", "allow_restricted") and final == Decision.MODIFY):
+        return table.outcome
+    return _legacy_outcome_name(final)
+
+
+def _risk_held(table: TableResult | None, ctxd: ContextualDecisions | None) -> bool:
+    return bool(
+        table is not None and ctxd is not None and ctxd.enforcing and table.outcome in ("hold", "verify")
+        and not any(c in table.reason_codes for c in ("GUARDRAIL_ESCALATE",))
+    )  # fmt: skip
+
+
+def _apply_table(
+    table: TableResult, outcome: StageOutcome, status: int, prepared: Prepared
+) -> tuple[StageOutcome, int]:
+    """Enforce mode: turn the table's outcome into the stage outcome the rest of the flow uses."""
+    legacy = table.legacy
+    if legacy == outcome.decision or (legacy == Decision.ALLOW and outcome.decision == Decision.MODIFY):
+        return outcome, status  # guardrails already decided this (or stricter-equal)
+    codes = ", ".join(table.reason_codes)
+    risk = prepared.assessment.score if prepared.assessment else outcome.risk_score
+    if legacy == Decision.BLOCK:
+        return StageOutcome(Decision.BLOCK, f"denied by decision table ({codes})", risk, None, outcome.results), 403
+    if legacy == Decision.ESCALATE:
+        reason = f"held for review: risk {prepared.assessment.band if prepared.assessment else '?'} ({codes})"
+        return StageOutcome(Decision.ESCALATE, reason, risk, outcome.payload, outcome.results), status
+    return outcome, status

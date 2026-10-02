@@ -60,6 +60,7 @@ class GatewayApiKey(Base):
     expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    agent_id: Mapped[str | None] = mapped_column(String(128))  # bound agent (A1); NULL = any (A0)
 
 
 class AgentProfile(Base):
@@ -139,3 +140,14 @@ class AuditEvent(Base):
     snapshot_version: Mapped[str | None] = mapped_column(String(64))
     latency_ms: Mapped[float] = mapped_column(Float, nullable=False)
     usage_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False, server_default="0")
+    # Decision records v2 (migration 0002). NULL on rows written before it.
+    outcome: Mapped[str | None] = mapped_column(String(24))
+    reason_codes: Mapped[list[str] | None] = mapped_column(ARRAY(String))
+    descriptor: Mapped[dict | None] = mapped_column(JSONB(none_as_null=True))  # None -> SQL NULL
+    risk: Mapped[dict | None] = mapped_column(JSONB(none_as_null=True))
+    assurance: Mapped[str | None] = mapped_column(String(4))
+    # Tamper evidence: one hash chain per (gateway process, tenant); see app/audit/chain.py.
+    chain_id: Mapped[str | None] = mapped_column(String(64))
+    chain_seq: Mapped[int | None] = mapped_column(BigInteger)
+    prev_hash: Mapped[str | None] = mapped_column(String(64))
+    record_hash: Mapped[str | None] = mapped_column(String(64))

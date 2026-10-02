@@ -31,10 +31,15 @@ class ApiKeyIn(BaseModel):
     environments: list[Environment] | None = None
     expires_at: datetime | None = None
     rate_limit_per_minute: int | None = Field(default=None, ge=0, le=1_000_000)
+    # Bind the key to one registered agent (recommended). None = legacy key for any agent_id.
+    agent_id: str | None = Field(default=None, min_length=1, max_length=128)
 
 
 class ApiKeyPatch(BaseModel):
+    """Only the fields present in the body change (null clears a field)."""
+
     rate_limit_per_minute: int | None = Field(default=None, ge=0, le=1_000_000)
+    agent_id: str | None = Field(default=None, min_length=1, max_length=128)
 
 
 class AgentIn(BaseModel):
@@ -81,7 +86,14 @@ async def create_api_key(
     tenant_id: str, body: ApiKeyIn, p: Principal = Depends(principal), c: Container = Depends(container)
 ):
     key, raw = await c.catalog.create_api_key(
-        p, tenant_id, body.name, body.scopes, body.environments, body.expires_at, body.rate_limit_per_minute
+        p,
+        tenant_id,
+        body.name,
+        body.scopes,
+        body.environments,
+        body.expires_at,
+        body.rate_limit_per_minute,
+        agent_id=body.agent_id,
     )
     return {**_key_out(key), "key": raw, "note": "Store this key now; only its hash is kept."}
 
@@ -95,7 +107,13 @@ async def list_api_keys(tenant_id: str, p: Principal = Depends(principal), c: Co
 async def patch_api_key(
     tenant_id: str, key_id: str, body: ApiKeyPatch, p: Principal = Depends(principal), c: Container = Depends(container)
 ):
-    return _key_out(await c.catalog.set_api_key_rate_limit(p, tenant_id, key_id, body.rate_limit_per_minute))
+    fields = body.model_fields_set or {"rate_limit_per_minute"}  # an empty body keeps the old meaning
+    key = None
+    if "agent_id" in fields:  # first: it validates the agent, so a bad request changes nothing
+        key = await c.catalog.bind_api_key(p, tenant_id, key_id, body.agent_id)
+    if "rate_limit_per_minute" in fields:
+        key = await c.catalog.set_api_key_rate_limit(p, tenant_id, key_id, body.rate_limit_per_minute)
+    return _key_out(key)
 
 
 @router.delete("/tenants/{tenant_id}/api-keys/{key_id}")

@@ -34,6 +34,10 @@ class GuardRequest(BaseModel):
     delegation_chain: list[str] = Field(default_factory=list, max_length=16)
     tool_metadata: dict[str, Any] | None = None
     payload: GuardPayloadIn
+    # Set to true only if the caller applies `obligations` from the response (row limits, masking,
+    # read-only credentials...). Otherwise the gateway never answers "allow with restrictions":
+    # it holds the request for review (or blocks) instead. None is left out of the JSON body.
+    accepts_obligations: bool | None = None
 
 
 class GuardrailOutcome(BaseModel):
@@ -54,6 +58,24 @@ class PolicyOutcome(BaseModel):
     obligations: list[str] = Field(default_factory=list)
 
 
+class RiskSignal(BaseModel):
+    """One named contribution to the risk score (the reason codes explain the decision)."""
+
+    code: str
+    points: int
+    detail: str = ""
+
+
+class RiskAssessment(BaseModel):
+    score: int = Field(ge=0, le=100)
+    band: str  # low | elevated | high | critical
+    trust: int = Field(ge=0, le=100)  # the agent's current (dynamic) trust
+    confidence: float = Field(ge=0.0, le=1.0)  # share of the context that was available
+    mode: str  # shadow (computed, not enforced) | enforce
+    would_outcome: str  # what the decision table decided (enforced only in enforce mode)
+    signals: list[RiskSignal] = Field(default_factory=list)
+
+
 class GuardResponse(BaseModel):
     request_id: str
     trace_id: str
@@ -68,6 +90,15 @@ class GuardResponse(BaseModel):
     snapshot_version: str | None = None
     # Set when decision == "escalate" (HTTP 202): poll GET /v1/escalations/{escalation_id}.
     escalation_id: str | None = None
+    # Finer-grained result of the decision table (allow, allow_restricted, modify, verify, hold,
+    # deny, quarantine_session). `decision` stays the backwards-compatible summary of it.
+    outcome: str | None = None
+    reason_codes: list[str] = Field(default_factory=list)
+    # Restrictions the caller must apply (only with accepts_obligations=true), e.g. {"row_limit": 500}.
+    obligations: dict[str, Any] = Field(default_factory=dict)
+    risk: RiskAssessment | None = None
+    # How strongly the API key identifies the agent: A0 = agent_id is only claimed, A1 = key bound to it.
+    assurance: str | None = None
 
     @property
     def allowed(self) -> bool:

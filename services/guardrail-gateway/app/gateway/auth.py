@@ -19,6 +19,13 @@ class Principal:
     key_name: str
     scopes: frozenset[str]
     rate_limit_per_minute: int | None = None  # None = the gateway default (GUARD_RATE_LIMIT_PER_MINUTE)
+    # The only agent this key may act as. None = a legacy key that accepts any claimed agent_id.
+    agent_id: str | None = None
+
+    @property
+    def assurance(self) -> str:
+        """Identity assurance: A0 = agent_id is only claimed in the body, A1 = the key is bound to it."""
+        return "A1" if self.agent_id else "A0"
 
 
 def hash_key(raw: str) -> str:

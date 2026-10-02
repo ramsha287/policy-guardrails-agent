@@ -14,9 +14,10 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from sqlalchemy import text
 
+from app.audit.chain import AuditChain
 from app.audit.spool import AuditSpool
 from app.audit.writer import AuditWriter
-from app.config import Settings, get_settings, load_env_file
+from app.config import Settings, get_settings, load_env_file, risk_config
 from app.context.builder import ContextBuilder
 from app.context.catalog import CachedCatalog
 from app.db.session import make_engine, make_sessionmaker
@@ -32,8 +33,10 @@ from app.observability import setup_logging, setup_tracing
 from app.policy.opa import OpaClient
 from app.repositories.api_keys import PgApiKeyStore
 from app.repositories.catalog import PgCatalogStore
+from app.risk.contextual import ContextualDecisions
 from app.routers import escalations, guard, health, internal, proxy
 from app.services import Services
+from app.session.store import MemorySessionStore, RedisSessionStore
 from guardrail_sdk import EnvSecretReader, PluginContext
 from guardrail_sdk.tls import ClientTLS
 
@@ -109,8 +112,17 @@ async def _production_lifespan(app: FastAPI) -> AsyncIterator[None]:
         spool=AuditSpool(Path(settings.audit_spool_dir), settings.audit_spool_max_mb * 1024 * 1024)
         if settings.audit_spool_dir
         else None,
+        chain=AuditChain(),
     )
     await audit.start()
+
+    sessions = RedisSessionStore(state.client) if state else MemorySessionStore(settings.session_memory_entries)
+    contextual = ContextualDecisions(
+        sessions,
+        mode=settings.risk_mode,
+        require_bound_keys=settings.require_bound_keys,
+        config=risk_config(settings),
+    )
 
     opa = OpaClient(http, settings.opa_url, settings.opa_decision_path, settings.opa_timeout_ms)
 
@@ -142,6 +154,13 @@ async def _production_lifespan(app: FastAPI) -> AsyncIterator[None]:
         },
         registry=registry,
         control_plane=control_plane,
+        contextual=contextual,
+    )
+    logger.info(
+        "contextual decisions: risk_mode=%s, require_bound_keys=%s, session store=%s",
+        contextual.mode,
+        settings.require_bound_keys,
+        "redis" if state else "memory (per replica)",
     )
     upstream: httpx.AsyncClient | None = None
     if settings.proxy_enabled:

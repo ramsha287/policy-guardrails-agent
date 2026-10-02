@@ -17,6 +17,11 @@ class RedisStateStore:
     def __init__(self, url: str) -> None:
         self._r = Redis.from_url(url, decode_responses=True)
 
+    @property
+    def client(self) -> Redis:
+        """The shared connection pool (also used for session state, app/session/store.py)."""
+        return self._r
+
     async def get(self, key: str) -> str | None:
         return await self._r.get(key)
 

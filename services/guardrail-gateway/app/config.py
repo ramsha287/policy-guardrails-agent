@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 from functools import lru_cache
 from pathlib import Path
@@ -7,6 +8,8 @@ from typing import Literal
 
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+from app.risk.engine import RiskConfig
 
 APP_DIR = Path(__file__).resolve().parent
 
@@ -71,10 +74,34 @@ class Settings(BaseSettings):
     proxy_models: list[str] = Field(default_factory=list, alias="PROXY_MODELS")  # empty = any model
     proxy_timeout_seconds: float = Field(120.0, gt=0, alias="PROXY_TIMEOUT_SECONDS")
 
+    # Contextual decisions (app/risk/contextual.py)
+    #   off: descriptors only · shadow: compute + audit, don't change decisions · enforce: apply the table
+    risk_mode: Literal["off", "shadow", "enforce"] = Field("shadow", alias="RISK_MODE")
+    # Reject API keys that aren't bound to one agent (identity assurance A0). Recommended in production
+    # once every key has been bound in the console (Tenants & keys).
+    require_bound_keys: bool = Field(False, alias="REQUIRE_BOUND_KEYS")
+    # Domains treated as internal destinations (suffix match), e.g. "acme.com,acme.internal".
+    internal_domains: str = Field("", alias="INTERNAL_DOMAINS")
+    # JSON object overriding RiskConfig defaults (weights, caps, limits), e.g. {"elevated_row_limit": 500}.
+    risk_config_json: str | None = Field(None, alias="RISK_CONFIG_JSON")
+    # Session state without REDIS_URL is per replica; size of that in-memory store.
+    session_memory_entries: int = Field(50_000, ge=100, alias="SESSION_MEMORY_ENTRIES")
+
     # Optional
     redis_url: str | None = Field(None, alias="REDIS_URL")
     otel_endpoint: str | None = Field(None, alias="OTEL_EXPORTER_OTLP_ENDPOINT")
     bootstrap_env_file: Path | None = Field(None, alias="BOOTSTRAP_ENV_FILE")
+
+
+def risk_config(settings: Settings) -> RiskConfig:
+    """RiskConfig defaults, overridden by RISK_CONFIG_JSON, plus INTERNAL_DOMAINS."""
+    overrides = json.loads(settings.risk_config_json) if settings.risk_config_json else {}
+    if not isinstance(overrides, dict):
+        raise ValueError("RISK_CONFIG_JSON must be a JSON object")
+    domains = [d.strip() for d in settings.internal_domains.split(",") if d.strip()]
+    if domains:
+        overrides["internal_domains"] = domains
+    return RiskConfig.model_validate(overrides)
 
 
 def load_env_file(path: Path | None) -> None:

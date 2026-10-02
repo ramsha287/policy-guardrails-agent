@@ -142,6 +142,20 @@ resp = client.chat.completions.create(model="gpt-4o-mini", messages=[{"role": "u
 Proxy mode covers input and output (and tool calls the model proposes). Retrieval and tool
 results still need the hooks, because the proxy never sees them.
 
+## Agent-bound keys, sessions and obligations
+
+- **One key per agent.** Create the key with the agent selected (console) or `agent_id` (API).
+  The gateway then refuses any request from that key with a different `agent_id` (403,
+  `KEY_AGENT_MISMATCH`), and production can refuse unbound keys altogether.
+- **Send a `session_id`** that stays the same for one run of the agent. Session state (what was
+  read, earlier denials, taint from retrieved or external content) only works with it, and
+  requests without it carry a small `NO_SESSION` risk.
+- **Obligations.** If your code can apply restrictions such as `{"row_limit": 1000}`, send
+  `"accepts_obligations": true` and apply `response.obligations` before running the tool. Without
+  it, a request that needs restrictions is held for review instead of allowed.
+- `response.reason_codes` and `response.risk` explain the decision; show the codes in your logs.
+  Don't show them to end users verbatim.
+
 ## Rate limits
 
 Each gateway API key is limited to `GUARD_RATE_LIMIT_PER_MINUTE` requests per minute. Admins can
