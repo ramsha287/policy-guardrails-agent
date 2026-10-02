@@ -62,6 +62,10 @@ class AuditChain:
         event["record_hash"] = record_digest(event)
         self._heads[tenant] = (seq + 1, event["record_hash"])
 
+    def heads(self) -> dict[str, tuple[int, str]]:
+        """tenant -> (last chain_seq, last record_hash): exported hourly so a copy lives elsewhere."""
+        return dict(self._heads)
+
 
 @dataclass
 class ChainReport:

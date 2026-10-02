@@ -151,3 +151,19 @@ class AuditEvent(Base):
     chain_seq: Mapped[int | None] = mapped_column(BigInteger)
     prev_hash: Mapped[str | None] = mapped_column(String(64))
     record_hash: Mapped[str | None] = mapped_column(String(64))
+
+
+class OutboxEvent(Base):
+    """Transactional outbox (migration 0003): events written in the same transaction as the audit
+    rows they describe, published to Redis / a webhook by app/events/relay.py, then pruned."""
+
+    __tablename__ = "outbox"
+    __table_args__ = {"schema": "guardrail"}
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    event_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False, unique=True)
+    topic: Mapped[str] = mapped_column(String(64), nullable=False)
+    tenant_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    payload: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

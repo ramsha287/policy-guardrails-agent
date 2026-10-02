@@ -49,6 +49,32 @@ except GuardrailBlocked:                         # rejected or expired
     answer = "Sorry, I can't help with that."
 ```
 
+### User confirmation (outcome `verify`)
+
+Some high-risk steps can be cleared by the person the agent works for instead of a reviewer: for
+example, the first time an agent sends data to an external host. Opt in per request with
+`verification_channels=["user_confirmation"]` and a `user_id`
+(`GuardHooks(client, user_id="u1", extra={"verification_channels": ["user_confirmation"]})`).
+The gateway then answers 202 with `outcome="verify"` and the hooks raise
+`GuardrailVerificationRequired` (a subclass of `GuardrailBlocked`):
+
+```python
+try:
+    args = await hooks.before_tool("http.post", {"url": url, "body": body})
+except GuardrailVerificationRequired as exc:
+    v = exc.verification                         # v.id, v.summary, v.expires_at (10 minutes)
+    # Your app (not the agent) shows v.summary to the user and signs them in again with
+    # nonce=v.id (OIDC). If they approve, it sends the token from that sign-in:
+    await client.confirm_verification(v.id, fresh_id_token, approve=True)
+    args = await hooks.before_tool("http.post", {"url": url, "body": body})   # identical retry
+```
+
+The confirmation counts for that exact request once (same body, user and session). The token must
+belong to the request's `user_id`, come from a recent sign-in and carry `nonce=v.id`, so the agent
+can't confirm its own request even if it can see the user's normal access token. `client.verification_status(id)` polls if confirmation happens elsewhere. Without
+`verification_channels` the step goes to the review queue as before. Setup on the gateway:
+`VERIFY_OIDC_*` ([settings](contextual-decisions.md#settings)).
+
 ## Tools (any framework)
 
 Put `guard_tool` **under** the framework's decorator, so the framework still sees the original

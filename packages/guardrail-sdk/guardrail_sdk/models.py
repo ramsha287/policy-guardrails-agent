@@ -11,7 +11,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-SDK_VERSION = "1.1.0"
+SDK_VERSION = "1.2.0"
 
 
 class Stage(str, Enum):

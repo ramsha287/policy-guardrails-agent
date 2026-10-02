@@ -166,6 +166,18 @@ services:
       BOOTSTRAP_ENV_FILE: /bootstrap/dev.env
       AI_GATEWAY_URL: http://instant-redaction-service:8001
       REDIS_URL: redis://redis:6379/0
+      # Contextual decisions (docs/contextual-decisions.md, docs/testing-contextual-decisions.md).
+      # Override from the shell, e.g. `RISK_MODE=enforce docker compose up -d guardrail-gateway`.
+      RISK_MODE: ${RISK_MODE:-shadow}
+      # Dev only (refused unless GATEWAY_ENV=dev): lets `python -m app.cli dev-user-token`
+      # mint user tokens for the user-confirmation flow. Production uses VERIFY_OIDC_*.
+      VERIFY_DEV_SECRET: ${VERIFY_DEV_SECRET:-dev-only-verify-secret-0123456789abcdef}
+      # SQL dry run against a read-only database, e.g.
+      # '{"database.read": "postgresql://gateway:gateway@postgres:5432/gateway"}' (see the testing guide)
+      VERIFY_SQL_DRY_RUN: ${VERIFY_SQL_DRY_RUN:-}
+      VERIFY_DRY_RUN_MAX_ROWS: ${VERIFY_DRY_RUN_MAX_ROWS:-10000}
+      # Decision events on Redis pub/sub (redis-cli PSUBSCRIBE 'events.*'). "" = off.
+      OUTBOX_SINKS: ${OUTBOX_SINKS:-redis}
       # OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
     volumes:
       - bootstrap:/bootstrap:ro

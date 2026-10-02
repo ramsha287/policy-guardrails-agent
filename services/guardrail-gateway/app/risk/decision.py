@@ -8,8 +8,9 @@ Outcomes, strongest first:
 
     deny > quarantine_session > hold > verify > throttle > modify > allow_restricted > allow
 
-`verify` means "more evidence needed". Until the verification engine exists (sprint B) it falls
-back to `hold` (human review), which is the strictest non-final answer.
+`verify` means "more evidence needed". With the verification engine (app/verify) the gateway
+resolves it to allow, a pending user confirmation or a hold; without one (VERIFICATION_ENABLED=false)
+it falls back to `hold` (human review), the strictest non-final answer.
 
 `allow_restricted` carries obligations (e.g. {"row_limit": 1000}). A caller that hasn't declared
 `accepts_obligations` would silently ignore them, so for such callers the answer becomes `hold`.

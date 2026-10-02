@@ -21,7 +21,8 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from app.audit.chain import AuditChain
 from app.audit.digest import payload_digest
 from app.audit.spool import AuditSpool
-from app.db.models import AuditEvent
+from app.db.models import AuditEvent, OutboxEvent
+from app.events.outbox import decision_event
 from app.observability import AUDIT_DROPPED, AUDIT_SPOOL_BYTES, AUDIT_SPOOLED, AUDIT_WRITTEN
 
 __all__ = ["AuditSink", "AuditWriter", "payload_digest"]
@@ -61,9 +62,16 @@ class AuditWriter:
         replay_seconds: float = 10.0,
         drain_timeout_seconds: float = 5.0,
         chain: AuditChain | None = None,
+        outbox_source: str | None = None,
     ) -> None:
         self._sm = sessionmaker
         self._chain = chain
+        # Set (e.g. "guardrail-gateway/gw-1") when an outbox sink is configured: each audit batch
+        # then also writes its decision.made.v1 events, in the same transaction.
+        self._outbox_source = outbox_source
+        # (chain_id, tenant) -> (chain_seq, record_hash) of the newest record actually committed.
+        # Exported as audit.chain_heads.v1, so an exported head always exists in the database.
+        self._written_heads: dict[tuple[str, str], tuple[int, str]] = {}
         self._maintenance = maintenance
         self._spool = spool
         self._replay_seconds = replay_seconds
@@ -193,8 +201,20 @@ class AuditWriter:
         async with self._sm() as s:
             # ON CONFLICT DO NOTHING makes a retried batch idempotent.
             await s.execute(insert(AuditEvent).on_conflict_do_nothing(), _complete(batch))
+            if self._outbox_source is not None:
+                events = [decision_event(e, self._outbox_source) for e in batch]
+                await s.execute(insert(OutboxEvent).on_conflict_do_nothing(index_elements=["event_id"]), events)
             await s.commit()
         AUDIT_WRITTEN.inc(len(batch))
+        for e in batch:
+            chain_id, seq, digest = e.get("chain_id"), e.get("chain_seq"), e.get("record_hash")
+            if chain_id and isinstance(seq, int) and digest:
+                key = (str(chain_id), str(e.get("tenant_id") or ""))
+                if seq > self._written_heads.get(key, (0, ""))[0]:
+                    self._written_heads[key] = (seq, str(digest))
+
+    def written_heads(self) -> dict[tuple[str, str], tuple[int, str]]:
+        return dict(self._written_heads)
 
     async def _run(self) -> None:
         while True:

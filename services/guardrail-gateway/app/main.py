@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import socket
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import Any
 
 import httpx
 from fastapi import FastAPI, Request
@@ -17,7 +19,15 @@ from sqlalchemy import text
 from app.audit.chain import AuditChain
 from app.audit.spool import AuditSpool
 from app.audit.writer import AuditWriter
-from app.config import Settings, get_settings, load_env_file, risk_config
+from app.config import (
+    Settings,
+    check_verification_settings,
+    dry_run_targets,
+    get_settings,
+    load_env_file,
+    outbox_sinks,
+    risk_config,
+)
 from app.context.builder import ContextBuilder
 from app.context.catalog import CachedCatalog
 from app.db.session import make_engine, make_sessionmaker
@@ -25,6 +35,8 @@ from app.engine.pipeline import GuardrailEngine
 from app.engine.registry import PluginRegistry, SnapshotHolder
 from app.engine.remote import CatalogHolder, ControlPlaneClient, ControlPlaneSync, DocCache
 from app.engine.state import RedisStateStore
+from app.events.relay import OutboxRelay
+from app.events.sinks import RedisSink, Sink, WebhookSink
 from app.gateway.auth import Authenticator
 from app.gateway.middleware import BodySizeLimitMiddleware, RequestContextMiddleware
 from app.gateway.proxy import ChatProxy, ProxyConfig
@@ -34,9 +46,13 @@ from app.policy.opa import OpaClient
 from app.repositories.api_keys import PgApiKeyStore
 from app.repositories.catalog import PgCatalogStore
 from app.risk.contextual import ContextualDecisions
-from app.routers import escalations, guard, health, internal, proxy
+from app.routers import authzen, escalations, guard, health, internal, proxy, verifications
 from app.services import Services
 from app.session.store import MemorySessionStore, RedisSessionStore
+from app.verify.dryrun import SqlDryRun
+from app.verify.engine import VerificationEngine
+from app.verify.store import MemoryVerificationStore, RedisVerificationStore
+from app.verify.user_token import UserTokenConfig, UserTokenVerifier
 from guardrail_sdk import EnvSecretReader, PluginContext
 from guardrail_sdk.tls import ClientTLS
 
@@ -102,6 +118,9 @@ async def _production_lifespan(app: FastAPI) -> AsyncIterator[None]:
         scoring = CachedCatalog(PgCatalogStore(sm), ttl_seconds=settings.catalog_cache_ttl_seconds)
         extra_ready = {}
 
+    chain = AuditChain()
+    sinks_wanted = outbox_sinks(settings)
+    source = f"guardrail-gateway/{settings.gateway_id or socket.gethostname()}"
     audit = AuditWriter(
         sm,
         queue_size=settings.audit_queue_size,
@@ -112,16 +131,42 @@ async def _production_lifespan(app: FastAPI) -> AsyncIterator[None]:
         spool=AuditSpool(Path(settings.audit_spool_dir), settings.audit_spool_max_mb * 1024 * 1024)
         if settings.audit_spool_dir
         else None,
-        chain=AuditChain(),
+        chain=chain,
+        outbox_source=source if sinks_wanted else None,
     )
     await audit.start()
 
+    relay: OutboxRelay | None = None
+    webhook_http: httpx.AsyncClient | None = None
+    if sinks_wanted:
+        sinks: list[Sink] = []
+        if "redis" in sinks_wanted and state is not None:
+            sinks.append(RedisSink(state.client))
+        if "webhook" in sinks_wanted and settings.outbox_webhook_url:
+            webhook_http = httpx.AsyncClient(timeout=10.0)
+            sinks.append(WebhookSink(webhook_http, settings.outbox_webhook_url, settings.outbox_webhook_secret))
+        relay = OutboxRelay(
+            sm,
+            sinks,
+            source=source,
+            heads=audit.written_heads,
+            retention_days=settings.outbox_retention_days,
+            chain_heads_seconds=settings.outbox_chain_heads_seconds,
+        )
+        relay.start()
+        logger.info("event outbox on: sinks=%s", ",".join(s.name for s in sinks))
+
     sessions = RedisSessionStore(state.client) if state else MemorySessionStore(settings.session_memory_entries)
+    # The IdP's JWKS is on the public internet: its own client with the system trust store (the
+    # internal client may trust only the mesh CA).
+    jwks_http = httpx.AsyncClient(timeout=5.0) if settings.verify_oidc_jwks_url else None
+    verifier = build_verifier(settings, state.client if state else None, jwks_http)
     contextual = ContextualDecisions(
         sessions,
         mode=settings.risk_mode,
         require_bound_keys=settings.require_bound_keys,
         config=risk_config(settings),
+        verifier=verifier,
     )
 
     opa = OpaClient(http, settings.opa_url, settings.opa_decision_path, settings.opa_timeout_ms)
@@ -157,10 +202,11 @@ async def _production_lifespan(app: FastAPI) -> AsyncIterator[None]:
         contextual=contextual,
     )
     logger.info(
-        "contextual decisions: risk_mode=%s, require_bound_keys=%s, session store=%s",
+        "contextual decisions: risk_mode=%s, require_bound_keys=%s, session store=%s, verification=%s",
         contextual.mode,
         settings.require_bound_keys,
         "redis" if state else "memory (per replica)",
+        _describe_verifier(verifier),
     )
     upstream: httpx.AsyncClient | None = None
     if settings.proxy_enabled:
@@ -184,13 +230,60 @@ async def _production_lifespan(app: FastAPI) -> AsyncIterator[None]:
         for t in tasks:
             t.cancel()
         await audit.stop()
+        if relay is not None:  # after the audit drain, so the last decisions' events are in the outbox
+            await relay.stop()
+        if webhook_http is not None:
+            await webhook_http.aclose()
         await snapshots.close()
         await http.aclose()
+        if jwks_http is not None:
+            await jwks_http.aclose()
+        if verifier is not None and verifier.dry_run is not None:
+            await verifier.dry_run.close()
         if upstream is not None:
             await upstream.aclose()
         if state is not None:
             await state.close()
         await db.dispose()
+
+
+def build_verifier(settings: Settings, redis: Any, http: httpx.AsyncClient | None) -> VerificationEngine | None:
+    if not settings.verification_enabled:
+        return None
+    check_verification_settings(settings)
+    store = RedisVerificationStore(redis) if redis is not None else MemoryVerificationStore()
+    targets = dry_run_targets(settings)
+    tokens = UserTokenVerifier(
+        UserTokenConfig(
+            issuer=settings.verify_oidc_issuer,
+            audience=settings.verify_oidc_audience,
+            jwks_url=settings.verify_oidc_jwks_url,
+            jwks_json=settings.verify_oidc_jwks_json,
+            user_claim=settings.verify_user_claim,
+            max_auth_age_seconds=settings.verify_max_auth_age_seconds,
+            required_acr=tuple(a.strip() for a in settings.verify_required_acr.split(",") if a.strip()),
+            dev_secret=settings.verify_dev_secret,
+            require_nonce=settings.verify_require_nonce,
+        ),
+        http,
+    )
+    return VerificationEngine(
+        store,
+        dry_run=SqlDryRun(targets) if targets else None,
+        user_tokens=tokens,
+        max_dry_run_rows=settings.verify_dry_run_max_rows,
+    )
+
+
+def _describe_verifier(v: VerificationEngine | None) -> str:
+    if v is None:
+        return "off (verify -> human review)"
+    parts = ["human review"]
+    if v.dry_run is not None:
+        parts.append(f"sql dry run ({len(v.dry_run.targets)} targets)")
+    if v.user_confirmation_enabled:
+        parts.append("user confirmation")
+    return ", ".join(parts)
 
 
 def create_app(settings: Settings | None = None, services: Services | None = None) -> FastAPI:
@@ -224,6 +317,8 @@ def create_app(settings: Settings | None = None, services: Services | None = Non
     app.include_router(health.router)
     app.include_router(guard.router)
     app.include_router(escalations.router)
+    app.include_router(verifications.router)
+    app.include_router(authzen.router)
     app.include_router(internal.router)
     app.include_router(proxy.router)
     setup_tracing(app, settings.otel_endpoint)

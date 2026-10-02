@@ -87,6 +87,34 @@ class Settings(BaseSettings):
     # Session state without REDIS_URL is per replica; size of that in-memory store.
     session_memory_entries: int = Field(50_000, ge=100, alias="SESSION_MEMORY_ENTRIES")
 
+    # Verification engine (app/verify): what a `verify` outcome can use instead of a human reviewer.
+    # Off -> `verify` is held for review exactly like before.
+    verification_enabled: bool = Field(True, alias="VERIFICATION_ENABLED")
+    # User confirmation: tokens from your identity provider (OIDC). Needs issuer + audience + JWKS.
+    verify_oidc_issuer: str | None = Field(None, alias="VERIFY_OIDC_ISSUER")
+    verify_oidc_audience: str | None = Field(None, alias="VERIFY_OIDC_AUDIENCE")
+    verify_oidc_jwks_url: str | None = Field(None, alias="VERIFY_OIDC_JWKS_URL")
+    verify_oidc_jwks_json: str | None = Field(None, alias="VERIFY_OIDC_JWKS_JSON")
+    verify_user_claim: str = Field("sub", alias="VERIFY_USER_CLAIM")
+    verify_max_auth_age_seconds: int = Field(600, ge=30, alias="VERIFY_MAX_AUTH_AGE_SECONDS")
+    verify_required_acr: str = Field("", alias="VERIFY_REQUIRED_ACR")  # comma-separated
+    # The token's `nonce` must be the verification id (a sign-in started for this confirmation).
+    # Off: any recent token of the user works, and the requesting agent's own key can't confirm.
+    verify_require_nonce: bool = Field(True, alias="VERIFY_REQUIRE_NONCE")
+    # Development only (refused unless GATEWAY_ENV=dev): accept HS256 tokens from `app.cli dev-user-token`.
+    verify_dev_secret: str | None = Field(None, alias="VERIFY_DEV_SECRET")
+    # SQL dry run: JSON {"<tool name or resource>": "<read-replica DSN>"}. Never the primary.
+    verify_sql_dry_run: str | None = Field(None, alias="VERIFY_SQL_DRY_RUN")
+    verify_dry_run_max_rows: int = Field(10_000, ge=1, alias="VERIFY_DRY_RUN_MAX_ROWS")
+
+    # Event outbox (app/events): decision events written with the audit rows, then published.
+    # Comma-separated: "redis", "webhook" or both. Empty = no outbox rows are written at all.
+    outbox_sinks: str = Field("", alias="OUTBOX_SINKS")
+    outbox_webhook_url: str | None = Field(None, alias="OUTBOX_WEBHOOK_URL")
+    outbox_webhook_secret: str | None = Field(None, alias="OUTBOX_WEBHOOK_SECRET")
+    outbox_retention_days: int = Field(7, ge=1, alias="OUTBOX_RETENTION_DAYS")
+    outbox_chain_heads_seconds: int = Field(3600, ge=60, alias="OUTBOX_CHAIN_HEADS_SECONDS")
+
     # Optional
     redis_url: str | None = Field(None, alias="REDIS_URL")
     otel_endpoint: str | None = Field(None, alias="OTEL_EXPORTER_OTLP_ENDPOINT")
@@ -102,6 +130,37 @@ def risk_config(settings: Settings) -> RiskConfig:
     if domains:
         overrides["internal_domains"] = domains
     return RiskConfig.model_validate(overrides)
+
+
+def check_verification_settings(settings: Settings) -> None:
+    """Refuse development-only settings in production (fail at startup, not at the first request)."""
+    if settings.environment != "dev" and settings.verify_dev_secret:
+        raise RuntimeError(
+            f"VERIFY_DEV_SECRET is for GATEWAY_ENV=dev only (this is {settings.environment}); configure VERIFY_OIDC_*"
+        )
+    if settings.verify_dev_secret and len(settings.verify_dev_secret) < 32:
+        raise RuntimeError("VERIFY_DEV_SECRET must be at least 32 characters (e.g. `openssl rand -hex 32`)")
+
+
+def outbox_sinks(settings: Settings) -> list[str]:
+    sinks = [x.strip() for x in settings.outbox_sinks.split(",") if x.strip()]
+    unknown = set(sinks) - {"redis", "webhook"}
+    if unknown:
+        raise ValueError(f"OUTBOX_SINKS: unknown sink(s) {sorted(unknown)}; use redis and/or webhook")
+    if "redis" in sinks and not settings.redis_url:
+        raise ValueError("OUTBOX_SINKS=redis needs REDIS_URL")
+    if "webhook" in sinks and not settings.outbox_webhook_url:
+        raise ValueError("OUTBOX_SINKS=webhook needs OUTBOX_WEBHOOK_URL")
+    if "webhook" in sinks and settings.environment == "production" and not settings.outbox_webhook_secret:
+        raise ValueError("OUTBOX_WEBHOOK_SECRET is required in production (receivers must verify the signature)")
+    return sinks
+
+
+def dry_run_targets(settings: Settings) -> dict[str, str]:
+    raw = json.loads(settings.verify_sql_dry_run) if settings.verify_sql_dry_run else {}
+    if not isinstance(raw, dict) or not all(isinstance(k, str) and isinstance(v, str) for k, v in raw.items()):
+        raise ValueError('VERIFY_SQL_DRY_RUN must be a JSON object {"tool or resource": "postgresql://..."}')
+    return raw
 
 
 def load_env_file(path: Path | None) -> None:

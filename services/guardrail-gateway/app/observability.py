@@ -45,6 +45,9 @@ AUDIT_SPOOLED = Counter("audit_events_spooled_total", "Audit events written to t
 CONTROL_PLANE_REACHABLE = Gauge("guardrail_control_plane_reachable", "1 if the last control-plane fetch answered")
 CONFIG_LAST_SYNC = Gauge("guardrail_config_last_sync_timestamp_seconds", "Last time the control plane answered a fetch")
 SNAPSHOT_LOADED = Gauge("guardrail_snapshot_loaded", "1 while a guardrail snapshot is loaded (0 = refusing traffic)")
+OUTBOX_PUBLISHED = Counter("guardrail_outbox_published_total", "Outbox events published to the sinks")
+OUTBOX_ERRORS = Counter("guardrail_outbox_errors_total", "Outbox publish failures (retried)", ["sink"])
+OUTBOX_BACKLOG = Gauge("guardrail_outbox_backlog", "Outbox events not yet published")
 AUDIT_SPOOL_BYTES = Gauge("audit_spool_bytes", "Bytes of audit events waiting in the disk spool")
 
 

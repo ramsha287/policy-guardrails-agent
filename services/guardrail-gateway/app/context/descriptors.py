@@ -114,6 +114,12 @@ def describe(
         return ActionDescriptor("unknown", "unknown", target=resource, notes=(f"parser error: {type(exc).__name__}",))
 
 
+def sql_text(tool_arguments: Mapping[str, Any] | None, request_arguments: Mapping[str, Any] | None) -> str | None:
+    """The SQL string `describe()` parsed (same key order and precedence), for the dry run."""
+    args: dict[str, Any] = {**(request_arguments or {}), **(tool_arguments or {})}
+    return _first_str(args, _SQL_KEYS)
+
+
 # ---- helpers ------------------------------------------------------------------------------------
 
 

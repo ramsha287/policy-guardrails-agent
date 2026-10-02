@@ -32,11 +32,22 @@ class AuditSpool:
         self.dir = directory
         self.max_bytes = max_bytes
         self._lock = threading.Lock()  # append/remove run in worker threads
+        self._last_ns = 0  # file names are strictly increasing, even on coarse clocks (Windows)
         try:
             self.dir.mkdir(parents=True, exist_ok=True)
         except OSError as exc:
             logger.error("Audit spool directory %s is not usable: %s", directory, exc)
         self._size = self._scan_size()
+        self._last_ns = self._newest_name_ns()  # files left by an earlier run stay ahead in replay
+
+    def _newest_name_ns(self) -> int:
+        newest = 0
+        for f in self.files():
+            try:
+                newest = max(newest, int(f.name.split("-")[1]))
+            except (IndexError, ValueError):  # not one of ours
+                pass
+        return newest
 
     def _scan_size(self) -> int:
         total = 0
@@ -67,8 +78,10 @@ class AuditSpool:
                 return False
             tmp: str | None = None
             try:
-                # time-ordered names so replay keeps the original order
-                name = f"audit-{time.time_ns():020d}-{uuid.uuid4().hex[:8]}.jsonl"
+                # time-ordered names so replay keeps the original order; two appends can read the
+                # same clock value, so each name is at least 1 ns after the previous one
+                self._last_ns = max(time.time_ns(), self._last_ns + 1)
+                name = f"audit-{self._last_ns:020d}-{uuid.uuid4().hex[:8]}.jsonl"
                 fd, tmp = tempfile.mkstemp(dir=self.dir, prefix=".audit-")
                 with os.fdopen(fd, "wb") as fh:
                     fh.write(data)
