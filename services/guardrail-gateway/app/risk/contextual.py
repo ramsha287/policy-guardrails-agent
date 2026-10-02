@@ -70,6 +70,10 @@ def _request_digest(body: GuardRequest) -> str:
     return payload_digest(rest)
 
 
+# Outcomes that would let a request through; these are checked against open verifications.
+FOLLOW_UP_OUTCOMES = frozenset({"allow", "allow_restricted", "modify"})
+
+
 def volume_key(d: ActionDescriptor) -> str | None:
     return f"{d.kind}:{d.verb}:{d.target}" if d.kind in ("sql", "http", "file") and d.target else None
 
@@ -164,8 +168,12 @@ class ContextualDecisions:
         self, prepared: Prepared, table: TableResult, *, principal: Principal, body: GuardRequest, stage: Stage,
         payload: Payload, payload_sha256: str, environment: str,
     ) -> tuple[TableResult, Verification | None]:  # fmt: skip
-        """Resolve a `verify` outcome. Shadow mode only describes the plan (nothing runs or is stored)."""
-        if table.outcome != "verify" or self.verifier is None:
+        """Resolve a `verify` outcome. Shadow mode only describes the plan (nothing runs or is stored).
+
+        In enforce mode an allowing outcome is also checked against verifications already opened
+        for this exact request (see VerificationEngine.follow_up)."""
+        follow_up = table.outcome in FOLLOW_UP_OUTCOMES and self.enforcing
+        if self.verifier is None or (table.outcome != "verify" and not follow_up):
             return table, None
         tool = payload.tool_call
         c = VerifyContext(
@@ -192,7 +200,13 @@ class ContextualDecisions:
             resource=body.resource,
             sql=sql_text(tool.arguments if tool else None, body.arguments),
         )
-        r = await self.verifier.resolve(c) if self.enforcing else self.verifier.describe(c)
+        if follow_up:
+            found = await self.verifier.follow_up(c)
+            if found is None:
+                return table, None
+            r = found
+        else:
+            r = await self.verifier.resolve(c) if self.enforcing else self.verifier.describe(c)
         out = TableResult(r.outcome, tuple(dict.fromkeys((*table.reason_codes, *r.codes))))  # type: ignore[arg-type]
         return out, r.verification
 

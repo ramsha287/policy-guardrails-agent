@@ -124,7 +124,7 @@ async def run_stage(
                     engine_decision=outcome.decision,
                     accepts_obligations=bool(body.accepts_obligations),
                 )
-                if table is not None and table.outcome == "verify":
+                if table is not None:  # a `verify`, or an allow that follows up an open verification
                     table, verification = await ctxd.verify(
                         prepared,
                         table,

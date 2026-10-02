@@ -9,6 +9,7 @@ from app.context.builder import ContextBuilder
 from app.context.catalog import CachedCatalog
 from app.engine.pipeline import GuardrailEngine
 from app.risk.contextual import ContextualDecisions
+from app.risk.decision import TableResult
 from app.session.store import MemorySessionStore
 from app.verify.dryrun import SqlDryRun
 from app.verify.engine import VerificationEngine
@@ -135,6 +136,52 @@ def test_user_rejection_blocks_the_retry():
         assert res.status == 403 and res.response.outcome == "deny" and "USER_REJECTED" in res.response.reason_codes
 
     asyncio.run(go())
+
+
+def _risk_drops_to_allow(svc):
+    """From now on the decision table says `allow`, as when a session stops being new and the
+    identical retry's score falls below the `verify` band."""
+    real = svc.contextual.decide
+
+    def decide(prepared, **kw):
+        t = real(prepared, **kw)
+        return TableResult("allow", ()) if t is not None and t.outcome == "verify" else t
+
+    svc.contextual.decide = decide
+
+
+@pytest.mark.parametrize("answer", [None, False, True])
+def test_an_open_verification_still_decides_the_retry_when_risk_drops(answer):
+    svc = services()
+    body = req("tool", **POST, verification_channels=["user_confirmation"])
+
+    async def go():
+        v = (await acall(svc, Stage.TOOL, body)).response.verification
+        assert v is not None
+        if answer is not None:
+            await svc.contextual.verifier.confirm(
+                "demo", v.id, user_token=mint_dev_token(DEV, "u1", nonce=v.id), approve=answer
+            )
+        _risk_drops_to_allow(svc)
+        res = (await acall(svc, Stage.TOOL, body)).response
+        if answer is None:  # still waiting for the person: not skipped by waiting
+            assert res.outcome == "verify" and res.verification.id == v.id
+        elif answer is False:  # the person said no: not overridden by waiting
+            assert res.outcome == "deny" and "USER_REJECTED" in res.reason_codes
+        else:  # approved: allowed, recorded as verified, and the approval is used up
+            assert res.outcome == "allow"
+            assert {"VERIFIED", "EVIDENCE_USER_CONFIRMATION"} <= set(res.reason_codes)
+            again = (await acall(svc, Stage.TOOL, body)).response
+            assert again.outcome == "allow" and "VERIFIED" not in again.reason_codes
+
+    asyncio.run(go())
+
+
+def test_allowed_requests_without_a_verification_are_unchanged():
+    svc = services()
+    _risk_drops_to_allow(svc)
+    res = call(svc, Stage.TOOL, req("tool", **POST, verification_channels=["user_confirmation"])).response
+    assert res.outcome == "allow" and res.verification is None and "VERIFIED" not in res.reason_codes
 
 
 def test_shadow_mode_reports_the_plan_without_running_it():

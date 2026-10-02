@@ -195,6 +195,30 @@ class VerificationEngine:
         await self.store.take_evidence(c.tenant_id, c.request_hash)  # anything stored for it is spent
         return Resolution("allow", ("VERIFIED", *codes), plan=tuple(p.kinds))
 
+    async def follow_up(self, c: VerifyContext) -> Resolution | None:
+        """For a request the decision table would now allow: is it one already sent for verification?
+
+        Risk signals decay (a session stops being new), so an identical retry can fall below the
+        `verify` band. A pending, rejected or approved verification for this exact request still
+        decides it, or waiting a few minutes would skip the person (or override their "no").
+        None means there is nothing on record for this request.
+        """
+        try:
+            evidence = await self.store.evidence(c.tenant_id, c.request_hash)
+            if any(e.kind == "user_confirmation" and not e.passed for e in evidence):
+                await self.store.consume_evidence(c.tenant_id, c.request_hash)
+                return Resolution("deny", ("USER_REJECTED",))
+            v = await self.store.pending_for(c.tenant_id, c.request_hash)
+            if v is not None:
+                return Resolution("verify", ("VERIFY_USER_CONFIRMATION",), verification=v)
+            if any(e.passed for e in evidence):
+                taken = await self.store.take_evidence(c.tenant_id, c.request_hash)
+                kinds = dict.fromkeys(f"EVIDENCE_{e.kind.upper()}" for e in taken if e.passed)
+                return Resolution("allow", ("VERIFIED", *kinds))
+            return None
+        except Exception:  # noqa: BLE001 - fail closed, as resolve() does
+            return Resolution("hold", ("VERIFY_ERROR",))
+
     # ---- the person's answer (POST /v1/verifications/{id}/confirm) -------------------------------
 
     async def confirm(
