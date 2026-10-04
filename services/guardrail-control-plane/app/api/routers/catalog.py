@@ -25,6 +25,10 @@ class TenantPatch(BaseModel):
     status: Literal["active", "suspended"]
 
 
+class AdvisorPolicyIn(BaseModel):
+    data_classes: list[str] = Field(default_factory=list, max_length=4)
+
+
 class ApiKeyIn(BaseModel):
     name: str = Field(min_length=1, max_length=100)
     scopes: list[str] = Field(default_factory=lambda: ["guard:invoke"])
@@ -79,6 +83,13 @@ async def patch_tenant(
     tenant_id: str, body: TenantPatch, p: Principal = Depends(principal), c: Container = Depends(container)
 ):
     return (await c.catalog.set_tenant_status(p, tenant_id, body.status)).model_dump(mode="json")
+
+
+@router.put("/tenants/{tenant_id}/advisor-policy")
+async def put_advisor_policy(
+    tenant_id: str, body: AdvisorPolicyIn, p: Principal = Depends(principal), c: Container = Depends(container)
+):
+    return (await c.catalog.set_advisor_policy(p, tenant_id, body.data_classes)).model_dump(mode="json")
 
 
 @router.post("/tenants/{tenant_id}/api-keys", status_code=201)

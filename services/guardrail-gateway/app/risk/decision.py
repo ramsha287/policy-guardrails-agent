@@ -12,6 +12,9 @@ Outcomes, strongest first:
 resolves it to allow, a pending user confirmation or a hold; without one (VERIFICATION_ENABLED=false)
 it falls back to `hold` (human review), the strictest non-final answer.
 
+An enforcing advisor (app/advise) can turn an allowing outcome into `verify` (ADVISOR_VERIFY); it
+can never turn anything into a more permissive outcome.
+
 `allow_restricted` carries obligations (e.g. {"row_limit": 1000}). A caller that hasn't declared
 `accepts_obligations` would silently ignore them, so for such callers the answer becomes `hold`.
 """
@@ -93,6 +96,7 @@ def decide(
     accepts_obligations: bool,
     cfg: RiskConfig,
     verification_available: bool = False,
+    advisor_verify: bool = False,
 ) -> TableResult:
     if not policy_allow:
         return TableResult("deny", ("POLICY_DENY",))
@@ -106,6 +110,10 @@ def decide(
     elif engine_decision == Decision.ESCALATE:
         codes.append("GUARDRAIL_ESCALATE")
 
+    if advisor_verify and out in ("allow", "allow_restricted", "modify"):
+        # An enforcing advisor asked for evidence. It can only make the outcome stricter.
+        out = "verify"
+        codes.append("ADVISOR_VERIFY")
     if out == "verify" and not verification_available:
         out = "hold"
         codes.append("VERIFY_AS_HOLD")

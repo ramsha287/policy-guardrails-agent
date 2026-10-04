@@ -171,3 +171,15 @@ async def analytics(
 ):
     """Decisions per stage and per guardrail, latency and a time series, from the audit log."""
     return await c.analytics.guardrails(p, environment=environment, tenant_id=tenant_id, hours=hours)
+
+
+@router.get("/analytics/advisors")
+async def analytics_advisors(
+    environment: Environment | None = None,
+    tenant_id: str | None = None,
+    hours: int = Query(24 * 7, ge=1, le=24 * 90),
+    p: Principal = Depends(principal),
+    c: Container = Depends(container),
+):
+    """The advisor pilot: answers per advisor, failures, latency, and agreement with the final outcome."""
+    return await c.analytics.advisors(p, environment=environment, tenant_id=tenant_id, hours=hours)

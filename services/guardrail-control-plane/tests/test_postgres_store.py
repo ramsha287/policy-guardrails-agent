@@ -152,6 +152,75 @@ async def test_analytics_sql_on_postgres():
         await engine.dispose()
 
 
+async def test_advisor_analytics_sql_on_postgres():
+    """The advisor pilot queries against audit rows carrying `risk.advisors` (gateway 0.9+)."""
+    import json
+    from datetime import UTC, datetime, timedelta
+
+    from sqlalchemy import text
+
+    from app.db.session import make_engine, make_sessionmaker
+    from app.services.analytics import AnalyticsService
+    from tests.helpers import ALICE
+
+    def answers(label, status="answered"):
+        a = {"advisor": "jev", "provider": "http", "mode": "shadow", "status": status, "latency_ms": 90.0}
+        if status == "answered":
+            a.update(label=label, confidence=0.8, points=8 if label != "benign" else 0, verify=label == "malicious")
+        return {
+            "points": 0,
+            "verify": False,
+            "answers": [{**a, "question": "exfiltration"}, {**a, "question": "injection"}],
+        }
+
+    engine = make_engine(DSN)
+    async with engine.begin() as conn:
+        await conn.execute(text("CREATE SCHEMA IF NOT EXISTS audit"))
+        await conn.execute(text("DROP TABLE IF EXISTS audit.audit_events"))
+        await conn.execute(
+            text(
+                "CREATE TABLE audit.audit_events (created_at timestamptz NOT NULL, tenant_id varchar(64) NOT NULL,"
+                " request_id varchar(64) NOT NULL, environment varchar(16) NOT NULL, outcome varchar(32), risk jsonb)"
+            )
+        )
+        now = datetime.now(UTC)
+        rows = [
+            ("r1", "allow", {"score": 50, "advisors": answers("malicious")}),
+            ("r2", "hold", {"score": 60, "advisors": answers("suspicious")}),
+            ("r3", "allow", {"score": 40, "advisors": answers("benign")}),
+            ("r4", "allow", {"score": 45, "advisors": answers(None, status="timeout")}),
+            ("r5", "allow", {"score": 10}),  # low risk: advisors didn't run
+            ("r6", "allow", None),  # risk mode off
+        ]
+        for rid, outcome, risk in rows:
+            await conn.execute(
+                text("INSERT INTO audit.audit_events VALUES (:c, 'acme', :r, 'production', :o, CAST(:k AS jsonb))"),
+                {"c": now - timedelta(hours=1), "r": rid, "o": outcome, "k": json.dumps(risk) if risk else None},
+            )
+    sm = make_sessionmaker(engine)
+
+    async def fetch(sql, params):
+        async with sm() as s:
+            return [dict(r) for r in (await s.execute(text(sql), params)).mappings().all()]
+
+    try:
+        out = await AnalyticsService(fetch).advisors(ALICE, environment="production", tenant_id="acme", hours=24)
+        [jev] = out["advisors"]
+        assert jev["questions"] == 8 and jev["by_status"] == {"answered": 6, "timeout": 2}
+        assert jev["by_label"] == {"benign": 2, "malicious": 2, "suspicious": 2}
+        assert jev["agreement"] == {
+            "flagged_stopped": 1,
+            "flagged_released": 1,
+            "benign_stopped": 0,
+            "benign_released": 1,
+        }
+        assert jev["points"] == 32 and jev["verify_requests"] == 2
+    finally:
+        async with engine.begin() as conn:
+            await conn.execute(text("DROP SCHEMA audit CASCADE"))
+        await engine.dispose()
+
+
 async def test_gateway_connector_sql_on_postgres():
     """The gateway connector's activity query against an audit table shaped like the gateway's."""
     import json

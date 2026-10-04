@@ -49,6 +49,17 @@ OUTBOX_PUBLISHED = Counter("guardrail_outbox_published_total", "Outbox events pu
 OUTBOX_ERRORS = Counter("guardrail_outbox_errors_total", "Outbox publish failures (retried)", ["sink"])
 OUTBOX_BACKLOG = Gauge("guardrail_outbox_backlog", "Outbox events not yet published")
 AUDIT_SPOOL_BYTES = Gauge("audit_spool_bytes", "Bytes of audit events waiting in the disk spool")
+ADVISOR_ANSWERS = Counter(
+    "guardrail_advisor_answers_total",
+    "Advisor answers by status (answered, timeout, error, invalid, skipped_policy) and label",
+    ["advisor", "mode", "status", "label"],
+)
+ADVISOR_LATENCY = Histogram(
+    "guardrail_advisor_latency_ms", "Advisor latency (ms)", ["advisor"], buckets=LATENCY_BUCKETS
+)
+ADVISOR_POINTS = Counter(
+    "guardrail_advisor_points_total", "Risk points added by enforcing advisors (after caps)", ["stage"]
+)
 
 
 @contextmanager

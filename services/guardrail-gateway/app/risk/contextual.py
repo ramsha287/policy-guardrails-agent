@@ -5,6 +5,8 @@ Used by app/gateway/flow.py around the existing Context Builder -> OPA -> Guardr
     identity check   (always enforced: a key bound to agent X can't act as agent Y)
     prepare()        descriptor + session view + risk assessment, before OPA (OPA sees them too)
     decide()         decision table, after OPA and the guardrails
+    advise()         advisors (app/advise), uncertain band only, after the guardrails: they can only
+                     add capped points or ask for verification
     verify()         when the table said `verify`: dry run / user confirmation / human (app/verify)
     record()         update session state, baselines and trust penalties, after the decision
 
@@ -22,15 +24,18 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any, Literal
 
+from app.advise.contract import build_features
+from app.advise.panel import AdvisorPanel, Advisory
 from app.audit.digest import payload_digest
 from app.context.descriptors import ActionDescriptor, describe, sql_text
 from app.gateway.auth import Principal
+from app.observability import ADVISOR_POINTS
 from app.risk.decision import TableResult, decide
-from app.risk.engine import Assessment, RiskConfig, assess
+from app.risk.engine import Assessment, RiskConfig, Signal, assess, band_for
 from app.session.store import Penalty, SessionStore, SessionUpdate, SessionView
 from app.verify.engine import VerificationEngine, VerifyContext
 from app.verify.model import Verification, request_hash
-from guardrail_sdk import Decision, GuardRequest, Payload, Stage
+from guardrail_sdk import Decision, GuardrailOutcome, GuardRequest, Payload, Stage
 
 RiskMode = Literal["off", "shadow", "enforce"]
 SENSITIVE = ("PII", "CONFIDENTIAL")
@@ -47,6 +52,7 @@ class Prepared:
     descriptor: ActionDescriptor
     view: SessionView | None
     assessment: Assessment | None
+    advisory: Advisory | None = None
 
     def policy_input(self) -> dict[str, Any]:
         out: dict[str, Any] = {"descriptor": self.descriptor.to_dict()}
@@ -88,9 +94,11 @@ class ContextualDecisions:
         config: RiskConfig | None = None,
         clock: Callable[[], float] = time.time,
         verifier: VerificationEngine | None = None,
+        advisors: AdvisorPanel | None = None,
     ) -> None:
         self.store = store
         self.verifier = verifier
+        self.advisors = advisors
         self.mode: RiskMode = mode if store is not None else "off"
         self.require_bound_keys = require_bound_keys
         self.cfg = config or RiskConfig()
@@ -148,6 +156,38 @@ class ContextualDecisions:
 
     # ---- after OPA and the guardrails -----------------------------------------------------------
 
+    async def advise(
+        self, prepared: Prepared, *, principal: Principal, body: GuardRequest, stage: Stage, payload: Payload,
+        results: list[GuardrailOutcome], environment: str, hosted_classes: frozenset[str],
+    ) -> Prepared:  # fmt: skip
+        """Ask the advisors (uncertain band only). Enforcing advisors can only add points (capped)
+        or ask for verification; the band is recomputed from the higher score, so it never drops."""
+        a, view = prepared.assessment, prepared.view
+        if self.advisors is None or a is None or view is None or not self.advisors.applies(a.band):
+            return prepared
+        features = build_features(
+            stage=stage.value,
+            environment=environment,
+            data_classification=body.data_classification,
+            assurance=principal.assurance,
+            payload=payload,
+            descriptor=prepared.descriptor,
+            view=view,
+            assessment=a,
+            results=results,
+            internal_domains=self.cfg.internal_domains,
+        )
+        advisory = await self.advisors.advise(
+            tenant_id=principal.tenant_id, agent_id=body.agent_id, features=features, hosted_classes=hosted_classes
+        )
+        if advisory.points > 0:
+            ADVISOR_POINTS.labels(stage.value).inc(advisory.points)
+            score = min(100, a.score + advisory.points)
+            # The agent sees one aggregated code, never which advisor answered or why.
+            signals = (*a.signals, Signal("ADVISOR_RISK", advisory.points, ""))
+            a = Assessment(score, band_for(score, a.trust), a.trust, a.confidence, a.inherent, signals)
+        return Prepared(prepared.descriptor, view, a, advisory)
+
     def decide(
         self, prepared: Prepared, *, policy_allow: bool, engine_decision: Decision, accepts_obligations: bool
     ) -> TableResult | None:
@@ -162,6 +202,7 @@ class ContextualDecisions:
             accepts_obligations=accepts_obligations,
             cfg=self.cfg,
             verification_available=self.verifier is not None,
+            advisor_verify=bool(prepared.advisory and prepared.advisory.verify),
         )
 
     async def verify(

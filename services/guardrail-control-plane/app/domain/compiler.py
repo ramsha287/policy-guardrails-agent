@@ -122,7 +122,8 @@ def build_catalog(
 ) -> CatalogDoc:
     now = utcnow()
     by_tenant: dict[str, CatalogTenant] = {
-        t.id: CatalogTenant(id=t.id, name=t.name, status=t.status) for t in sorted(tenants, key=lambda t: t.id)
+        t.id: CatalogTenant(id=t.id, name=t.name, status=t.status, advisor_data_classes=t.advisor_data_classes)
+        for t in sorted(tenants, key=lambda t: t.id)
     }
     for k in sorted(keys, key=lambda k: k.id):
         if k.is_active and (k.expires_at is None or k.expires_at > now) and k.tenant_id in by_tenant:

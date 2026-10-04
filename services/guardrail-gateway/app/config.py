@@ -107,6 +107,12 @@ class Settings(BaseSettings):
     verify_sql_dry_run: str | None = Field(None, alias="VERIFY_SQL_DRY_RUN")
     verify_dry_run_max_rows: int = Field(10_000, ge=1, alias="VERIFY_DRY_RUN_MAX_ROWS")
 
+    # Advisors (app/advise): optional classifiers asked in the uncertain risk band; they can only add
+    # capped risk points or ask for verification. JSON list of advisors, or
+    # {"advisors": [...], "total_cap": 20, "bands": ["elevated", "high"]}. Empty = no advisors.
+    # Example: [{"name": "local", "provider": "local", "mode": "shadow"}]
+    advisors_json: str | None = Field(None, alias="ADVISORS_JSON")
+
     # Event outbox (app/events): decision events written with the audit rows, then published.
     # Comma-separated: "redis", "webhook" or both. Empty = no outbox rows are written at all.
     outbox_sinks: str = Field("", alias="OUTBOX_SINKS")

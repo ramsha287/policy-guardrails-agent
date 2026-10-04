@@ -116,6 +116,7 @@ const PAGES = [
   ["/connectors", "Discovery connectors"],
   ["/fleet", "Gateways"],
   ["/analytics", "Analytics"],
+  ["/advisors", "Advisors"],
   ["/activity", "Activity log"],
   ["/admin-keys", "Admin keys"],
 ];

@@ -117,6 +117,18 @@ async def run_stage(
             else:
                 outcome = await svc.engine.run(snapshot, stage, ctx, payload, policy.obligations)
                 status = 200
+                if ctxd is not None and prepared is not None and outcome.decision != Decision.BLOCK:
+                    with span("advisors", stage=stage.value):
+                        prepared = await ctxd.advise(
+                            prepared,
+                            principal=principal,
+                            body=body,
+                            stage=stage,
+                            payload=payload,
+                            results=outcome.results,
+                            environment=ctx.environment,
+                            hosted_classes=built.advisor_data_classes,
+                        )
             if ctxd is not None and prepared is not None:
                 table = ctxd.decide(
                     prepared,
@@ -240,13 +252,23 @@ async def run_stage(
             "reason_codes": reason_codes,
             # The descriptor holds table/column names, hosts and row counts, never values.
             "descriptor": prepared.descriptor.to_dict() if prepared is not None else None,
-            "risk": risk_out.model_dump(mode="json") if risk_out is not None else None,
+            "risk": _audited_risk(risk_out, prepared),
             "assurance": principal.assurance,
         }
     )
     REQUESTS.labels(stage.value, outcome.decision.value).inc()
     REQUEST_LATENCY.labels(stage.value).observe(latency_ms)
     return StageResult(status, response)
+
+
+def _audited_risk(risk_out: RiskAssessment | None, prepared: Prepared | None) -> dict | None:
+    """The risk block as audited: what the agent saw, plus every advisor answer (agent never sees those)."""
+    if risk_out is None:
+        return None
+    out = risk_out.model_dump(mode="json")
+    if prepared is not None and prepared.advisory is not None and prepared.advisory.ran:
+        out["advisors"] = prepared.advisory.to_dict()
+    return out
 
 
 def _legacy_outcome_name(decision: Decision) -> str:

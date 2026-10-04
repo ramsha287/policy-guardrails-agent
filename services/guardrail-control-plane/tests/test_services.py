@@ -578,3 +578,67 @@ async def test_binding_waits_until_every_live_gateway_supports_it():
     await cat.revoke_api_key(ALICE, "acme", key.id)
     with pytest.raises(ValidationFailed, match="revoked"):
         await cat.bind_api_key(ALICE, "acme", key.id, "bot")
+
+
+async def test_tenant_advisor_policy_is_opt_in_and_published():
+    ctx, store, _ = make_ctx()
+    cat, gws = CatalogService(ctx), GatewayService(ctx)
+    await cat.create_tenant(ALICE, "acme", "Acme")
+    doc, _ = await cat.current_document()
+    assert "advisor_data_classes" not in doc["tenants"][0]  # default: hosted advisors see nothing
+    common = dict(environment="dev", manifests=[], snapshot_version=None, catalog_version=None, last_error=None)
+    await gws.heartbeat(gateway_id="gw-old", capabilities=["agent_bound_keys"], **common)
+    with pytest.raises(ValidationFailed, match="gw-old"):  # it would reject the catalog
+        await cat.set_advisor_policy(ACME_ADMIN, "acme", ["INTERNAL"])
+    await gws.heartbeat(gateway_id="gw-old", capabilities=["agent_bound_keys", "advisors_v1"], **common)
+    t = await cat.set_advisor_policy(ACME_ADMIN, "acme", ["PII", "INTERNAL", "INTERNAL"])
+    assert t.advisor_data_classes == ["INTERNAL", "PII"]
+    doc, _ = await cat.current_document()
+    assert CatalogDoc.model_validate(doc).tenants[0].advisor_data_classes == ["INTERNAL", "PII"]
+    with pytest.raises(ValidationFailed):
+        await cat.set_advisor_policy(ALICE, "acme", ["SECRET"])
+    with pytest.raises(Forbidden):
+        await cat.set_advisor_policy(VIEWER, "acme", [])
+    await cat.create_tenant(ALICE, "other", "Other")
+    with pytest.raises(Forbidden):
+        await cat.set_advisor_policy(ACME_ADMIN, "other", ["INTERNAL"])
+    await cat.set_advisor_policy(ALICE, "acme", [])  # turning it off needs no gateway check
+    doc, _ = await cat.current_document()
+    assert "advisor_data_classes" not in doc["tenants"][0]
+    actions = [c.action for c in await store.list_changes("tenant", "acme")]
+    assert actions.count("advisor_policy") == 2
+
+
+async def test_advisor_pilot_analytics_shapes_the_audit_rows():
+    from app.services.analytics import AnalyticsService, AnalyticsUnavailable
+
+    seen = []
+
+    async def fetch(sql, params):
+        seen.append((sql, params))
+        if "flagged, stopped" in sql:
+            return [
+                {"advisor": "jev", "mode": "shadow", "flagged": True, "stopped": False, "n": 3},
+                {"advisor": "jev", "mode": "shadow", "flagged": True, "stopped": True, "n": 5},
+                {"advisor": "jev", "mode": "shadow", "flagged": False, "stopped": False, "n": 40},
+            ]
+        row = dict(provider="http", mode="shadow", question="exfiltration", avg_latency_ms=80.0, p95_latency_ms=150.0)
+        return [
+            {**row, "advisor": "jev", "status": "answered", "label": "benign", "n": 40, "avg_confidence": 0.9,
+             "points": 0, "verify_requests": 0},
+            {**row, "advisor": "jev", "status": "answered", "label": "malicious", "n": 8, "avg_confidence": 0.8,
+             "points": 64, "verify_requests": 2},
+            {**row, "advisor": "jev", "status": "timeout", "label": "none", "n": 2, "avg_confidence": None,
+             "points": 0, "verify_requests": 0},
+        ]  # fmt: skip
+
+    out = await AnalyticsService(fetch).advisors(ACME_ADMIN, hours=48)
+    [jev] = out["advisors"]
+    assert out["tenant_id"] == "acme" and seen[0][1]["tenant_id"] == "acme"  # a tenant key sees its own tenant
+    assert jev["questions"] == 50 and jev["by_status"] == {"answered": 48, "timeout": 2}
+    assert jev["by_label"] == {"benign": 40, "malicious": 8} and jev["no_signal_rate"] == 0.04
+    assert jev["agreement"] == {"flagged_stopped": 5, "flagged_released": 3, "benign_stopped": 0, "benign_released": 40}
+    with pytest.raises(Forbidden):
+        await AnalyticsService(fetch).advisors(ACME_ADMIN, tenant_id="other")
+    with pytest.raises(AnalyticsUnavailable):
+        await AnalyticsService(None).advisors(ALICE)

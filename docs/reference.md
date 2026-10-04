@@ -44,6 +44,8 @@ comes from the gateway's configuration.
 Responses also carry `outcome` (`allow`, `allow_restricted`, `modify`, `verify`, `hold`, `deny`,
 `quarantine_session`), `reason_codes`, `obligations`, `assurance` (`A0`/`A1`), `risk` (score,
 band, trust, signals) and `verification`. See [contextual-decisions.md](contextual-decisions.md).
+In the uncertain band, [advisors](advisors.md) may add `ADVISOR_RISK` (capped points) or
+`ADVISOR_VERIFY` (ask a person) — they only ever tighten the outcome.
 
 Other endpoints (same `X-API-Key`):
 
@@ -123,7 +125,8 @@ cd services/ai-gateway/instant-redaction-service && pip install -r requirements-
 ```
 
 Step-by-step checks of identity binding, risk, verification, AuthZEN and decision events on a
-running stack: [testing-contextual-decisions.md](testing-contextual-decisions.md).
+running stack: [testing-contextual-decisions.md](testing-contextual-decisions.md). Advisors:
+[testing-advisors.md](testing-advisors.md). Discovery: [testing-discovery.md](testing-discovery.md).
 
 
 ## Repository layout
@@ -132,6 +135,7 @@ running stack: [testing-contextual-decisions.md](testing-contextual-decisions.md
 packages/guardrail-sdk/           contracts, Guardrail base class, manifest, conformance + evaluation, agent client and hooks
   guardrail_sdk/integrations/     guard_tool, LangGraph nodes/retriever, CrewAI tool/inputs/output
 services/guardrail-gateway/       :8100  gateway + context builder + OPA client + engine + audit
+  app/advise/                     advisors: contract, panel (caps/band/data-policy), local/http/bedrock providers
   app/plugins/ai_gateway_pii/     AI Gateway PII guardrail: 1.0.0 (input/output), 1.1.0 (all four stages)
   app/plugins/noop/               reference local guardrail / template
   config/snapshots/<env>.json     which guardrails run where with CONFIG_SOURCE=file (seed for the control plane)

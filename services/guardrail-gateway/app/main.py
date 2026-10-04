@@ -16,6 +16,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from sqlalchemy import text
 
+from app.advise.factory import build_panel
 from app.audit.chain import AuditChain
 from app.audit.spool import AuditSpool
 from app.audit.writer import AuditWriter
@@ -161,12 +162,14 @@ async def _production_lifespan(app: FastAPI) -> AsyncIterator[None]:
     # internal client may trust only the mesh CA).
     jwks_http = httpx.AsyncClient(timeout=5.0) if settings.verify_oidc_jwks_url else None
     verifier = build_verifier(settings, state.client if state else None, jwks_http)
+    advisors = build_panel(settings.advisors_json)  # None when ADVISORS_JSON is empty
     contextual = ContextualDecisions(
         sessions,
         mode=settings.risk_mode,
         require_bound_keys=settings.require_bound_keys,
         config=risk_config(settings),
         verifier=verifier,
+        advisors=advisors,
     )
 
     opa = OpaClient(http, settings.opa_url, settings.opa_decision_path, settings.opa_timeout_ms)
@@ -202,11 +205,12 @@ async def _production_lifespan(app: FastAPI) -> AsyncIterator[None]:
         contextual=contextual,
     )
     logger.info(
-        "contextual decisions: risk_mode=%s, require_bound_keys=%s, session store=%s, verification=%s",
+        "contextual decisions: risk_mode=%s, require_bound_keys=%s, session store=%s, verification=%s, advisors=%s",
         contextual.mode,
         settings.require_bound_keys,
         "redis" if state else "memory (per replica)",
         _describe_verifier(verifier),
+        ", ".join(f"{a.name}({a.provider},{a.mode})" for a in advisors.specs) if advisors else "none",
     )
     upstream: httpx.AsyncClient | None = None
     if settings.proxy_enabled:
@@ -242,6 +246,8 @@ async def _production_lifespan(app: FastAPI) -> AsyncIterator[None]:
             await verifier.dry_run.close()
         if upstream is not None:
             await upstream.aclose()
+        if advisors is not None:
+            await advisors.close()
         if state is not None:
             await state.close()
         await db.dispose()

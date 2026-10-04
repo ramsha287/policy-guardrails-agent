@@ -174,6 +174,10 @@ services:
       # Contextual decisions (docs/contextual-decisions.md, docs/testing-contextual-decisions.md).
       # Override from the shell, e.g. `RISK_MODE=enforce docker compose up -d guardrail-gateway`.
       RISK_MODE: ${RISK_MODE:-shadow}
+      # Advisors (app/advise): the local classifier runs in shadow by default, so decisions are
+      # unchanged and its answers are recorded with each decision (Console -> Advisors). Set to ""
+      # to turn it off, or add an `http`/`bedrock` advisor; see docs/advisors.md.
+      ADVISORS_JSON: ${ADVISORS_JSON:-[{"name":"local","provider":"local","mode":"shadow"}]}
       # Dev only (refused unless GATEWAY_ENV=dev): lets `python -m app.cli dev-user-token`
       # mint user tokens for the user-confirmation flow. Production uses VERIFY_OIDC_*.
       VERIFY_DEV_SECRET: ${VERIFY_DEV_SECRET:-dev-only-verify-secret-0123456789abcdef}

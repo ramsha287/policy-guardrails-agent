@@ -39,6 +39,7 @@ class Tenant(Base):
     name: Mapped[str] = mapped_column(String(255))
     status: Mapped[str] = mapped_column(String(16), server_default="active")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    advisor_data_classes: Mapped[list[str]] = mapped_column(ARRAY(String), server_default="{}")
 
 
 class ApiKey(Base):

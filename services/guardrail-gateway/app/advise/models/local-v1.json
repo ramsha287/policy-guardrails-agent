@@ -1,0 +1,7 @@
+{
+  "version": "local-v1-untrained",
+  "questions": {
+    "exfiltration": {"bias": -4.0, "weights": {"dest_external": 2.0, "holds_sensitive": 1.5, "class_sensitive": 1.0, "verb_send": 1.0, "query_payload": 1.5, "encoded_blob": 1.0, "host_is_ip": 1.0, "host_lookalike": 1.5, "tainted": 1.0}, "suspicious_at": 0.5, "malicious_at": 0.8, "verify_at": 1.0},
+    "injection": {"bias": -4.0, "weights": {"tainted": 2.5, "dest_external": 1.0, "first_seen": 1.0, "verb_send": 0.5, "unparsed": 0.5}, "suspicious_at": 0.5, "malicious_at": 0.8, "verify_at": 1.0}
+  }
+}

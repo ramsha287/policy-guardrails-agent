@@ -140,6 +140,16 @@ class CatalogTenant(BaseModel):
     agents: list[CatalogAgent] = Field(default_factory=list)
     actions: list[CatalogAction] = Field(default_factory=list)
     modifiers: list[CatalogModifier] = Field(default_factory=list)
+    # Data classes hosted advisors may see for this tenant (opt-in per class; empty = none).
+    # Left out of the published JSON when empty, so older gateways still load the catalog.
+    advisor_data_classes: list[Literal["PUBLIC", "INTERNAL", "CONFIDENTIAL", "PII"]] = Field(default_factory=list)
+
+    @model_serializer(mode="wrap")
+    def _omit_default_advisor_policy(self, handler: SerializerFunctionWrapHandler) -> Any:
+        data = handler(self)
+        if not data.get("advisor_data_classes"):
+            data.pop("advisor_data_classes", None)
+        return data
 
 
 class CatalogDoc(BaseModel):

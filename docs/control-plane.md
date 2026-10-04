@@ -81,6 +81,7 @@ curl -s -XPATCH $CP/tenants/acme/api-keys/$KEY_ID -H "$A" -H "$J" -d '{"rate_lim
 curl -s -XPATCH $CP/tenants/acme/api-keys/$KEY_ID -H "$A" -H "$J" -d '{"agent_id":"support-bot"}'      # bind (null = unbind)
 curl -s -XDELETE $CP/tenants/acme/api-keys/$KEY_ID -H "$A"              # revoke
 curl -s -XPATCH $CP/tenants/acme -H "$A" -H "$J" -d '{"status":"suspended"}'  # every key stops working
+curl -s -XPUT $CP/tenants/acme/advisor-policy -H "$A" -H "$J" -d '{"data_classes":["INTERNAL"]}'  # hosted advisors (docs/advisors.md); [] = off
 ```
 
 **Registry.** Register a guardrail version with its manifest (`manifest` as JSON, or the
@@ -151,6 +152,8 @@ curl -s "$CP/analytics/guardrails?environment=production&hours=24" -H "$A"   # n
 # -> summary (requests, by_decision, policy_denied, block_rate), totals per stage/decision with avg and
 #    p95 latency, rows per guardrail/version/mode, and an hourly (daily past 72 h) time series.
 #    environment and tenant_id are optional filters; tenant keys only see their tenant.
+curl -s "$CP/analytics/advisors?hours=168" -H "$A"   # the advisor pilot (docs/advisors.md): per advisor,
+# -> answers by status and label, no-signal rate, latency, points, and agreement with the final outcome.
 ```
 
 ## Human review (ESCALATE)
