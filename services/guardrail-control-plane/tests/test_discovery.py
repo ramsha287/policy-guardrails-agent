@@ -389,12 +389,17 @@ async def test_dns_logs_find_direct_model_traffic_and_respect_the_log_directory(
     (tmp_path / "r53").mkdir()
     with gzip.open(tmp_path / "r53" / "a.log.gz", "wt") as fh:
         fh.write("\n".join(lines))
-    (tmp_path / "r53" / "escape.log").symlink_to("/etc/hostname")
+    try:
+        (tmp_path / "r53" / "escape.log").symlink_to("/etc/hostname")
+        escape = True
+    except OSError:  # Windows without Developer Mode or admin can't create symlinks
+        escape = False
 
     c = await env.connector("dns_log", {"path": "r53/*", "mcp_hosts": ["mcp.internal.example"], "window_hours": 24})
     run = await env.svc.sync(ALICE, "acme", c.id)
     assert run.status == "partial" and any("parsed" in w for w in run.warnings)
-    assert any("outside DISCOVERY_LOG_DIR" in w for w in run.warnings)
+    if escape:
+        assert any("outside DISCOVERY_LOG_DIR" in w for w in run.warnings)
 
     vm = await env.entity("aws-instance:i-0abc")
     assert vm.state == "shadow" and vm.agent_likelihood == "confirmed" and vm.direct_volume == 3
