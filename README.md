@@ -202,12 +202,19 @@ guardrail, retrieval and tool stages, the control plane with human review, and h
 production (console, Helm chart, mTLS, SOPS secrets, rate limits, durable audit, alerts and
 dashboards, proxy mode, multi-arch images).
 
-**Phase 6 (in progress), contextual decisions:** sprint A adds agent-bound keys, deterministic
+**Phase 6, contextual decisions:** sprint A adds agent-bound keys, deterministic
 action descriptors, session state, reason-coded risk, a decision table and hash-chained decision
 records. Sprint B adds verification (SQL dry run and user confirmation instead of always asking a
 reviewer), an OpenID AuthZEN decision API and decision events through a Postgres outbox. It runs
 in shadow mode by default. See [docs/contextual-decisions.md](docs/contextual-decisions.md), and
 [docs/testing-contextual-decisions.md](docs/testing-contextual-decisions.md) to check it works.
+
+**Phase 7, agent discovery and inventory:** connectors (our gateway's audit log, Kubernetes, DNS
+query logs, OpenAI, Bedrock/AgentCore, MCP servers) find the agents in your environments, including
+the ones nobody registered, and reconcile them with the registry: managed, registered-but-unmanaged,
+shadow or stale, with evidence, a relation graph, coverage, findings and MCP tool-definition
+pinning. The console has an Agent inventory and a Discovery connectors screen. See
+[docs/discovery.md](docs/discovery.md) and [docs/testing-discovery.md](docs/testing-discovery.md).
 
 **Guardrails today:** `ai-gateway-pii` (the AI Gateway) and the OPA policy checks. The next
 guardrails, such as prompt injection, toxicity and secrets, are not built yet. See

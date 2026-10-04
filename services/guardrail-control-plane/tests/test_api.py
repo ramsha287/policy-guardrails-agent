@@ -278,3 +278,94 @@ async def test_console_is_optional():
     app = create_app(settings, env.container)
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://cp") as c:
         assert (await c.get("/console/")).status_code == 404
+
+
+async def test_inventory_api_end_to_end():
+    """Connectors (platform-only), sync, entities, graph, coverage, findings and actions over HTTP."""
+    rows = [
+        {"environment": "production", "agent_id": "rogue-agent", "stage": "tool", "action": "http.post",
+         "assurance": "A0", "d_kind": "http", "d_verb": "send", "d_target": "evil.org", "d_destination": "external",
+         "d_host": "evil.org", "requests": 3, "blocked": 0, "first_seen": None, "last_seen": None},
+    ]  # fmt: skip
+
+    async def fetch(sql, params):
+        return rows
+
+    env = Env()
+    env.container.discovery.audit_fetch = fetch
+    alice, _, viewer = await env.keys()
+    c = env.client
+    inv = "/inv/v1"
+    assert (await c.post(f"{BASE}/tenants", json={"id": "acme", "name": "Acme"}, headers=alice)).status_code == 201
+    svc = AdminKeyService(env.container.ctx)
+    _, acme_admin = await svc.create(None, "acme-admin", ["admin"], "acme")
+    _, acme_editor = await svc.create(None, "acme-editor", ["editor"], "acme")
+    acme, editor = {"X-Admin-Key": acme_admin}, {"X-Admin-Key": acme_editor}
+
+    assert (await c.get(f"{inv}/connector-kinds")).status_code == 401
+    kinds = (await c.get(f"{inv}/connector-kinds", headers=viewer)).json()
+    assert {k["kind"] for k in kinds} >= {"gateway", "kubernetes", "dns_log", "openai_admin", "aws_bedrock", "mcp"}
+
+    body = {"kind": "gateway", "name": "gateway audit", "config": {"lookback_hours": 12}, "environment": "production"}
+    assert (await c.post(f"{inv}/tenants/acme/connectors", json=body, headers=acme)).status_code == 403
+    bad = await c.post(f"{inv}/tenants/acme/connectors", json={**body, "config": {"nope": 1}}, headers=alice)
+    assert bad.status_code == 422 and bad.json()["errors"]
+    created = await c.post(f"{inv}/tenants/acme/connectors", json=body, headers=alice)
+    assert created.status_code == 201, created.text
+    cid = created.json()["id"]
+    assert created.json()["config"]["lookback_hours"] == 12 and "lease_owner" not in created.json()
+    assert created.headers["cache-control"] == "no-store"
+
+    run = await c.post(f"{inv}/tenants/acme/connectors/{cid}/sync", headers=editor)
+    assert run.status_code == 200 and run.json()["status"] == "ok", run.text
+    assert (await c.post(f"{inv}/tenants/acme/connectors/{cid}/sync", headers=viewer)).status_code == 403
+    runs = (await c.get(f"{inv}/tenants/acme/connectors/{cid}/runs", headers=acme)).json()
+    assert len(runs) == 1 and runs[0]["observations"] == 1
+    # configuration is for platform admins; tenant keys see the connector without it
+    assert [x["config"] for x in (await c.get(f"{inv}/tenants/acme/connectors", headers=acme)).json()] == [{}]
+
+    shadows = (await c.get(f"{inv}/tenants/acme/entities", params={"state": "shadow"}, headers=acme)).json()
+    assert [e["name"] for e in shadows] == ["rogue-agent"]
+    eid = shadows[0]["id"]
+    detail = (await c.get(f"{inv}/tenants/acme/entities/{eid}", headers=viewer)).json()
+    assert (
+        detail["entity"]["state"] == "shadow" and detail["evidence"] and detail["findings"][0]["kind"] == "shadow_agent"
+    )
+    graph = (await c.get(f"{inv}/tenants/acme/entities/{eid}/graph", params={"depth": 1}, headers=acme)).json()
+    assert {n["name"] for n in graph["nodes"]} == {"rogue-agent", "http.post", "evil.org"}
+    assert (await c.get(f"{inv}/tenants/acme/entities", params={"state": "bogus"}, headers=acme)).status_code == 422
+
+    cov = (await c.get(f"{inv}/tenants/acme/coverage", headers=acme)).json()
+    assert cov["by_state"]["shadow"] == 1 and cov["agent_coverage"] == 0.0 and cov["connectors"][0]["last_run_at"]
+    findings = (await c.get(f"{inv}/tenants/acme/findings", headers=acme)).json()
+    fid = findings[0]["id"]
+    accepted = await c.patch(
+        f"{inv}/tenants/acme/findings/{fid}", json={"status": "accepted", "note": "known"}, headers=editor
+    )
+    assert accepted.status_code == 200 and accepted.json()["status"] == "accepted"
+    again = await c.patch(f"{inv}/tenants/acme/findings/{fid}", json={"status": "resolved"}, headers=editor)
+    assert again.status_code == 409  # accepted -> resolved isn't a transition; reopen first
+
+    reg = await c.post(
+        f"{inv}/tenants/acme/entities/{eid}/register",
+        json={"agent_id": "rogue-agent", "base_trust_score": 30},
+        headers=acme,
+    )
+    assert reg.status_code == 201 and reg.json()["registry_agent_id"] == "rogue-agent", reg.text
+    agents = (await c.get(f"{BASE}/tenants/acme/agents", headers=acme)).json()
+    assert [a["agent_id"] for a in agents] == ["rogue-agent"]
+    ignored = await c.post(
+        f"{inv}/tenants/acme/entities/{eid}/ignore", json={"reason": "pilot", "days": 7}, headers=editor
+    )
+    assert ignored.status_code == 200 and ignored.json()["ignore_reason"] == "pilot"
+    assert (await c.post(f"{inv}/tenants/acme/reconcile", headers=editor)).status_code == 200
+    summary = (await c.get(f"{inv}/tenants/acme/summary", headers=viewer)).json()
+    assert summary["by_kind"]["agent"] == 1
+
+    patched = await c.patch(f"{inv}/tenants/acme/connectors/{cid}", json={"enabled": False}, headers=alice)
+    assert patched.status_code == 200 and patched.json()["enabled"] is False
+    assert (await c.delete(f"{inv}/tenants/acme/connectors/{cid}", headers=alice)).status_code == 204
+    assert (await c.get(f"{inv}/tenants/acme/connectors/{cid}", headers=alice)).status_code == 404
+    me = (await c.get(f"{BASE}/me", headers={"X-Admin-Key": acme_admin})).json()
+    assert "inventory:write" in me["permissions"] and "discovery:write" not in me["permissions"]
+    assert me["features"]["discovery"] is True

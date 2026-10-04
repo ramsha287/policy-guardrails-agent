@@ -7,7 +7,8 @@ from contextlib import asynccontextmanager
 from contextvars import ContextVar
 from typing import Any
 
-from sqlalchemy import delete, func, select, update
+from sqlalchemy import Text, and_, cast, delete, func, or_, select, update
+from sqlalchemy.dialects import postgresql
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -15,6 +16,14 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from guardrail_sdk.documents import Assignment as AssignmentDoc
 
 from ..db import models as m
+from ..domain.inventory import (
+    ConnectorRecord,
+    EdgeRecord,
+    EntityRecord,
+    FindingRecord,
+    ObservationRecord,
+    SyncRunRecord,
+)
 from ..domain.records import (
     ActionRecord,
     AdminKeyRecord,
@@ -43,6 +52,7 @@ class PgStore:
     def __init__(self, sessionmaker: async_sessionmaker[AsyncSession]) -> None:
         self._sm = sessionmaker
         self._tx: ContextVar[AsyncSession | None] = ContextVar("cp_tx", default=None)
+        self._held: ContextVar[frozenset[str]] = ContextVar("cp_tenant_locks", default=frozenset())
 
     @asynccontextmanager
     async def transaction(self) -> AsyncIterator[None]:
@@ -59,6 +69,27 @@ class PgStore:
                         self._tx.reset(token)
             except IntegrityError as exc:
                 raise Conflict(str(exc.orig)) from exc
+
+    @asynccontextmanager
+    async def tenant_lock(self, tenant_id: str) -> AsyncIterator[None]:
+        # A session-level advisory lock on its own connection: held across the many short
+        # transactions of a run, released even if the run fails (and by Postgres if we die).
+        held = self._held.get()
+        if tenant_id in held:
+            yield
+            return
+        key = f"inventory:{tenant_id}"
+        engine = self._sm.kw["bind"]
+        async with engine.connect() as raw:
+            # One pinned connection in autocommit: lock and unlock happen on the same session.
+            conn = await raw.execution_options(isolation_level="AUTOCOMMIT")
+            await conn.execute(select(func.pg_advisory_lock(func.hashtext(key))))
+            token = self._held.set(held | {tenant_id})
+            try:
+                yield
+            finally:
+                self._held.reset(token)
+                await conn.execute(select(func.pg_advisory_unlock(func.hashtext(key))))
 
     @asynccontextmanager
     async def _s(self) -> AsyncIterator[AsyncSession]:
@@ -428,3 +459,210 @@ class PgStore:
             q = q.where(m.Change.entity_id == entity_id)
         async with self._s() as s:
             return [ChangeRecord.model_validate(r) for r in (await s.execute(q)).scalars()]
+
+    # ---- discovery and inventory --------------------------------------------------------------
+
+    async def put_connector(self, connector):
+        await self._merge(m.Connector, connector.model_dump())
+
+    async def get_connector(self, connector_id):
+        async with self._s() as s:
+            row = await s.get(m.Connector, connector_id)
+            return ConnectorRecord.model_validate(row) if row else None
+
+    async def list_connectors(self, tenant_id=None):
+        q = select(m.Connector).order_by(m.Connector.tenant_id, m.Connector.name, m.Connector.id)
+        if tenant_id is not None:
+            q = q.where(m.Connector.tenant_id == tenant_id)
+        async with self._s() as s:
+            return [ConnectorRecord.model_validate(r) for r in (await s.execute(q)).scalars()]
+
+    async def delete_connector(self, connector_id):
+        async with self._s() as s:
+            result = await s.execute(
+                delete(m.Connector).where(m.Connector.id == connector_id).returning(m.Connector.id)
+            )
+            return result.first() is not None
+
+    async def update_connector_fields(self, connector_id, fields):
+        allowed = {c.key for c in m.Connector.__table__.columns} - {
+            "id",
+            "tenant_id",
+            "kind",
+            "lease_owner",
+            "lease_until",
+        }
+        values = {k: v for k, v in fields.items() if k in allowed}
+        if not values:
+            return
+        async with self._s() as s:
+            await s.execute(update(m.Connector).where(m.Connector.id == connector_id).values(**values))
+
+    async def claim_connector(self, connector_id, owner, now, lease_until, *, only_if_due=False):
+        # Conditional UPDATE: of two replicas (or a scheduler tick and "sync now"), one wins.
+        conditions = [
+            m.Connector.id == connector_id,
+            or_(m.Connector.lease_until.is_(None), m.Connector.lease_until <= now),
+        ]
+        if only_if_due:
+            conditions += [
+                m.Connector.enabled.is_(True),
+                or_(
+                    m.Connector.last_run_at.is_(None),
+                    m.Connector.last_run_at + func.make_interval(0, 0, 0, 0, 0, m.Connector.interval_minutes) <= now,
+                ),
+            ]
+        async with self._s() as s:
+            result = await s.execute(
+                update(m.Connector)
+                .where(*conditions)
+                .values(lease_owner=owner, lease_until=lease_until)
+                .returning(m.Connector.id)
+            )
+            return result.first() is not None
+
+    async def release_connector(self, connector_id, owner, *, status, error, finished_at):
+        async with self._s() as s:
+            await s.execute(
+                update(m.Connector)
+                .where(m.Connector.id == connector_id, m.Connector.lease_owner == owner)
+                .values(
+                    lease_owner=None, lease_until=None, last_run_at=finished_at, last_status=status, last_error=error
+                )
+            )
+
+    async def put_run(self, run):
+        await self._merge(m.SyncRun, run.model_dump())
+
+    async def list_runs(self, connector_id, limit=20):
+        q = (
+            select(m.SyncRun)
+            .where(m.SyncRun.connector_id == connector_id)
+            .order_by(m.SyncRun.started_at.desc())
+            .limit(limit)
+        )
+        async with self._s() as s:
+            return [SyncRunRecord.model_validate(r) for r in (await s.execute(q)).scalars()]
+
+    async def add_observations(self, observations):
+        if not observations:
+            return
+        async with self._s() as s:
+            await s.execute(
+                insert(m.Observation).on_conflict_do_nothing(),
+                [_cols(m.Observation, o.model_dump()) for o in observations],
+            )
+
+    async def list_observations(self, tenant_id, *, entity_id=None, run_id=None, limit=100):
+        q = (
+            select(m.Observation)
+            .where(m.Observation.tenant_id == tenant_id)
+            .order_by(m.Observation.observed_at.desc())
+            .limit(limit)
+        )
+        if entity_id is not None:
+            q = q.where(m.Observation.entity_id == entity_id)
+        if run_id is not None:
+            q = q.where(m.Observation.run_id == run_id)
+        async with self._s() as s:
+            return [ObservationRecord.model_validate(r) for r in (await s.execute(q)).scalars()]
+
+    async def prune_observations(self, before):
+        async with self._s() as s:
+            result = await s.execute(delete(m.Observation).where(m.Observation.observed_at < before))
+            return int(getattr(result, "rowcount", 0) or 0)
+
+    async def put_entity(self, entity):
+        await self._merge(m.Entity, entity.model_dump())
+
+    async def get_entity(self, tenant_id, entity_id):
+        async with self._s() as s:
+            row = await s.get(m.Entity, entity_id)
+            return EntityRecord.model_validate(row) if row is not None and row.tenant_id == tenant_id else None
+
+    async def delete_entity(self, tenant_id, entity_id):
+        async with self._s() as s:
+            result = await s.execute(
+                delete(m.Entity).where(m.Entity.id == entity_id, m.Entity.tenant_id == tenant_id).returning(m.Entity.id)
+            )
+            return result.first() is not None
+
+    async def _overlap(self, tenant_id: str, column: Any, keys: list[str]) -> list[EntityRecord]:
+        if not keys:
+            return []
+        wanted = cast(postgresql.array(list(keys)), postgresql.ARRAY(Text))
+        q = select(m.Entity).where(m.Entity.tenant_id == tenant_id, column.op("&&")(wanted))
+        async with self._s() as s:
+            return [EntityRecord.model_validate(r) for r in (await s.execute(q)).scalars()]
+
+    async def find_entities(self, tenant_id, keys):
+        return await self._overlap(tenant_id, m.Entity.strong_keys, keys)
+
+    async def find_entities_weak(self, tenant_id, keys):
+        return await self._overlap(tenant_id, m.Entity.weak_keys, keys)
+
+    async def list_entities(self, tenant_id, *, kind=None, state=None, agents_only=False, query=None, limit=500):
+        q = (
+            select(m.Entity)
+            .where(m.Entity.tenant_id == tenant_id)
+            .order_by(m.Entity.kind, m.Entity.name, m.Entity.id)
+            .limit(limit)
+        )
+        if kind is not None:
+            q = q.where(m.Entity.kind == kind)
+        if state is not None:
+            q = q.where(m.Entity.state == state)
+        if agents_only:
+            q = q.where(m.Entity.agent_likelihood != "none")
+        if query:
+            like = f"%{query.lower().replace('%', '').replace('_', '')}%"
+            q = q.where(
+                or_(
+                    func.lower(m.Entity.name).like(like),
+                    func.lower(func.array_to_string(m.Entity.strong_keys, " ")).like(like),
+                )
+            )
+        async with self._s() as s:
+            return [EntityRecord.model_validate(r) for r in (await s.execute(q)).scalars()]
+
+    async def put_edge(self, edge):
+        await self._merge(m.Edge, edge.model_dump())
+
+    async def list_edges(self, tenant_id, *, entity_ids=None, source=None, open_only=True, as_of=None):
+        q = select(m.Edge).where(m.Edge.tenant_id == tenant_id).order_by(m.Edge.valid_from, m.Edge.id)
+        if entity_ids is not None:
+            if not entity_ids:
+                return []
+            q = q.where(or_(m.Edge.src.in_(entity_ids), m.Edge.dst.in_(entity_ids)))
+        if source is not None:
+            q = q.where(m.Edge.source == source)
+        if as_of is not None:
+            q = q.where(m.Edge.valid_from <= as_of, or_(m.Edge.valid_to.is_(None), m.Edge.valid_to > as_of))
+        elif open_only:
+            q = q.where(m.Edge.valid_to.is_(None))
+        async with self._s() as s:
+            return [EdgeRecord.model_validate(r) for r in (await s.execute(q)).scalars()]
+
+    async def put_finding(self, finding):
+        await self._merge(m.Finding, finding.model_dump())
+
+    async def get_finding(self, tenant_id, finding_id):
+        async with self._s() as s:
+            row = await s.get(m.Finding, finding_id)
+            return FindingRecord.model_validate(row) if row is not None and row.tenant_id == tenant_id else None
+
+    async def list_findings(self, tenant_id, *, status=None, entity_id=None, kind=None, limit=500):
+        q = select(m.Finding).where(m.Finding.tenant_id == tenant_id).order_by(m.Finding.created_at.desc()).limit(limit)
+        conds = [
+            c
+            for c in (
+                m.Finding.status == status if status is not None else None,
+                m.Finding.entity_id == entity_id if entity_id is not None else None,
+                m.Finding.kind == kind if kind is not None else None,
+            )
+            if c is not None
+        ]
+        if conds:
+            q = q.where(and_(*conds))
+        async with self._s() as s:
+            return [FindingRecord.model_validate(r) for r in (await s.execute(q)).scalars()]

@@ -44,8 +44,8 @@ what the key can do).
 | `viewer` | Read everything in its scope |
 | `reviewer` | Plus approve or reject held requests (sees a redacted preview only) |
 | `reviewer-raw` | Plus read the held payload (`?include_raw=true`) |
-| `editor` | Plus change the catalog and assignments, and request a publish |
-| `admin` | Everything, including the guardrail registry, publish approval and admin keys |
+| `editor` | Plus change the catalog and assignments, request a publish, and act on the agent inventory (run connectors, register/link/ignore, findings) |
+| `admin` | Everything, including the guardrail registry, publish approval, admin keys and (platform keys) discovery connectors |
 
 A key with `tenant_id` set is a **tenant key**. It only sees and changes its own tenant's catalog,
 tenant- and agent-scoped assignments and review queue. The registry, publishing and the change log
@@ -200,6 +200,7 @@ not overwrite API edits.
 | `GATEWAY_URL` / `GATEWAY_URLS` | unset | Gateways for `/simulate`: default, and per environment (JSON map) |
 | `AUDIT_DSN` | unset | Read-only audit access for `/analytics/guardrails` |
 | `CONSOLE_DIR` | `/app/console` | Built console; served at `/console` (and `/review`) when present |
+| `DISCOVERY_*` | see [discovery.md](discovery.md#settings) | Agent discovery: scheduler, limits, connector credentials |
 | `PORT` / `INTERNAL_PORT` | 8200 / unset | With `INTERNAL_PORT`, `/cp/v1/internal/*` is only served there |
 | `TLS_CERT_FILE`, `TLS_KEY_FILE`, `TLS_CLIENT_CA_FILE`, `TLS_CA_FILE`, `TLS_CLIENT_CERT_FILE`, `TLS_CLIENT_KEY_FILE` | unset | mTLS without a mesh (see [deployment.md](deployment.md#mtls-between-services)) |
 

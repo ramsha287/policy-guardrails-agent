@@ -59,6 +59,7 @@ async def me(p: Principal = Depends(principal), c: Container = Depends(container
         "features": {
             "simulate": bool(c.gateway_url or c.gateway_urls),
             "analytics": c.analytics_fetch is not None,
+            "discovery": True,
         },
     }
 

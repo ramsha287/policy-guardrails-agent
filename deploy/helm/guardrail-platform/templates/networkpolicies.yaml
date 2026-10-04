@@ -163,6 +163,20 @@ spec:
       ports:
         - {protocol: TCP, port: 6379}
     {{- end }}
+    {{- $dk := (.Values.controlPlane.discovery | default dict).kubernetes | default dict }}
+    {{- if $dk.enabled }}
+    {{- if not $dk.apiServerCIDRs }}
+    {{- fail "controlPlane.discovery.kubernetes.apiServerCIDRs is required when the Kubernetes connector is enabled (e.g. the address of `kubectl get endpoints kubernetes`, as /32)" }}
+    {{- end }}
+    # discovery's Kubernetes connector -> the API server
+    - ports:
+        - {protocol: TCP, port: 443}
+        - {protocol: TCP, port: 6443}
+      to:
+        {{- range $dk.apiServerCIDRs }}
+        - ipBlock: {cidr: {{ . | quote }}}
+        {{- end }}
+    {{- end }}
 {{- end }}
 {{- if .Values.aiGateway.enabled }}
 ---
@@ -259,7 +273,7 @@ spec:
   egress:
     - to:
         {{- range $np.externalEgressCIDRs }}
-        - ipBlock: {cidr: {{ . }}}
+        - ipBlock: {cidr: {{ . | quote }}}
         {{- end }}
 {{- end }}
 {{- if eq .Values.mtls.mode "linkerd" }}

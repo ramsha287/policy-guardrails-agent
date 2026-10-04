@@ -107,11 +107,13 @@ async function visit(page, hash, heading) {
 const PAGES = [
   ["/overview", "Overview"],
   ["/reviews", "Review queue"],
+  ["/inventory", "Agent inventory"],
   ["/approvals", "Publish approvals"],
   ["/pipeline", "Pipeline"],
   ["/simulate", "Simulate"],
   ["/guardrails", "Guardrails"],
   ["/catalog", "Tenants & keys"],
+  ["/connectors", "Discovery connectors"],
   ["/fleet", "Gateways"],
   ["/analytics", "Analytics"],
   ["/activity", "Activity log"],
@@ -191,6 +193,27 @@ async function main() {
       await approver.getByText("Approved: production is updated.").waitFor();
       check(true, "second admin approves the production publish");
       await ctx2.close();
+
+      // ---- inventory: register a shadow agent; run a discovery connector
+      await visit(page, "/inventory?tenant=demo&view=agents&state=shadow", "Agent inventory");
+      await page.getByRole("button", { name: "apps/crm-bot" }).click();
+      await page.getByRole("dialog").getByText("agent-like behaviour with no registry entry").waitFor();
+      await shot(page, "flow-inventory-entity");
+      await page.getByRole("button", { name: "Register agent" }).click();
+      check((await page.getByLabel("Agent id").inputValue()) === "crm-bot", "register suggests an agent id from the name");
+      await page.getByRole("button", { name: "Register", exact: true }).click();
+      await page.getByText("Registered as crm-bot.", { exact: false }).waitFor();
+      check(true, "a shadow agent can be registered from the inventory");
+      await page.getByRole("dialog").getByRole("button", { name: "Close" }).click();
+
+      await visit(page, "/connectors?tenant=demo", "Discovery connectors");
+      await page.getByRole("button", { name: "Run Gateway audit now" }).click();
+      await page.getByText(/Gateway audit: \d+ observations/).waitFor();
+      check(true, "a connector can be run now");
+      await page.getByRole("button", { name: "Runs" }).first().click();
+      await page.getByRole("dialog").locator("tbody tr").first().waitFor();
+      check((await page.getByRole("dialog").locator("tbody tr").count()) >= 2, "connector runs are listed");
+      await page.getByRole("dialog").getByRole("button", { name: "Close" }).click();
 
       // ---- catalog: a new gateway key is shown exactly once
       await visit(page, "/catalog", "Tenants & keys");

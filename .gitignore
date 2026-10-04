@@ -20,3 +20,6 @@ apps/console/screenshots/
 # decrypted secrets must never be committed
 *.dec.yaml
 deploy/secrets/**/secrets.yaml
+
+# discovery demo logs (python examples/discovery/make_dns_log.py)
+examples/discovery/logs/**/*.log

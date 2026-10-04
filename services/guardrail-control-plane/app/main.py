@@ -20,7 +20,7 @@ from guardrail_sdk.tls import ClientTLS
 
 from .api import errors
 from .api.container import Container
-from .api.routers import catalog, health, internal, operations, pipeline
+from .api.routers import catalog, health, internal, inventory, operations, pipeline
 from .config import Settings, get_settings
 from .db.session import make_engine, make_sessionmaker
 from .domain.crypto import PayloadCipher
@@ -28,9 +28,11 @@ from .events import NullPublisher, RedisPublisher
 from .metrics import refresh_loop
 from .services.analytics import Fetch
 from .services.context import Ctx, Policy
+from .services.discovery import scheduler_loop
 from .store.postgres import PgStore
 
 API_PREFIX = "/cp/v1"
+INVENTORY_PREFIX = "/inv/v1"
 logger = logging.getLogger(__name__)
 
 
@@ -83,6 +85,7 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     events = RedisPublisher(settings.redis_url) if settings.redis_url else NullPublisher()
     audit_engine = make_engine(settings.audit_dsn) if settings.audit_dsn else None
     http = httpx.AsyncClient(timeout=settings.http_timeout_seconds, verify=ClientTLS.from_env().ssl_context())
+    discovery_http = httpx.AsyncClient(timeout=30.0, follow_redirects=False)
     app.state.container = Container(
         ctx=Ctx(
             store=PgStore(make_sessionmaker(engine)),
@@ -95,14 +98,25 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
         gateway_url=settings.gateway_url,
         gateway_urls=settings.gateway_urls,
         analytics_fetch=_sql_fetcher(make_sessionmaker(audit_engine)) if audit_engine else None,
+        discovery_http=discovery_http,
+        discovery_allow_http=settings.discovery_allow_http,
+        discovery_max_observations=settings.discovery_max_observations,
     )
     logger.info("control plane ready (two-person: %s)", ",".join(settings.two_person_environments) or "none")
-    metrics_task = asyncio.create_task(refresh_loop(app.state.container.ctx), name="metrics")
+    tasks = [asyncio.create_task(refresh_loop(app.state.container.ctx), name="metrics")]
+    if settings.discovery_scheduler:
+        tasks.append(
+            asyncio.create_task(
+                scheduler_loop(app.state.container.discovery, settings.discovery_tick_seconds), name="discovery"
+            )
+        )
     try:
         yield
     finally:
-        metrics_task.cancel()
+        for t in tasks:
+            t.cancel()
         await http.aclose()
+        await discovery_http.aclose()
         if isinstance(events, RedisPublisher):
             await events.close()
         if audit_engine is not None:
@@ -126,6 +140,7 @@ def create_app(settings: Settings | None = None, container: Container | None = N
     app.include_router(health.router)
     for r in (catalog.router, pipeline.router, operations.router, internal.router):
         app.include_router(r, prefix=API_PREFIX)
+    app.include_router(inventory.router, prefix=INVENTORY_PREFIX)
     _mount_console(app, Path(settings.console_dir))
     return app
 
@@ -150,7 +165,7 @@ async def _security_headers(request: Request, call_next: Callable[[Request], Awa
         # index.html and everything else must always be revalidated
         immutable = path.startswith("/console/assets/") and response.status_code in (200, 304)
         h["Cache-Control"] = "public, max-age=31536000, immutable" if immutable else "no-cache"
-    elif path.startswith(API_PREFIX):
+    elif path.startswith((API_PREFIX, INVENTORY_PREFIX)):
         h.setdefault("Cache-Control", "no-store")
     return response
 

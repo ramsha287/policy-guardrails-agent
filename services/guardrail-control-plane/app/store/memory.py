@@ -5,10 +5,20 @@ from __future__ import annotations
 import asyncio
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from contextvars import ContextVar
+from datetime import timedelta
 from typing import TypeVar, overload
 
 from pydantic import BaseModel
 
+from ..domain.inventory import (
+    ConnectorRecord,
+    EdgeRecord,
+    EntityRecord,
+    FindingRecord,
+    ObservationRecord,
+    SyncRunRecord,
+)
 from ..domain.records import (
     ActionRecord,
     AdminKeyRecord,
@@ -55,7 +65,29 @@ class MemoryStore:
         self.admin_keys: dict[str, AdminKeyRecord] = {}
         self.gateways: dict[str, GatewayRecord] = {}
         self.changes: list[ChangeRecord] = []
+        self.connectors: dict[str, ConnectorRecord] = {}
+        self.runs: dict[str, SyncRunRecord] = {}
+        self.observations: list[ObservationRecord] = []
+        self.entities: dict[str, EntityRecord] = {}
+        self.edges: dict[str, EdgeRecord] = {}
+        self.findings: dict[str, FindingRecord] = {}
         self._lock = asyncio.Lock()
+        self._tenant_locks: dict[str, asyncio.Lock] = {}
+        self._held: ContextVar[frozenset[str]] = ContextVar("mem_tenant_locks", default=frozenset())
+
+    @asynccontextmanager
+    async def tenant_lock(self, tenant_id: str) -> AsyncIterator[None]:
+        held = self._held.get()
+        if tenant_id in held:  # re-entrant in the same task
+            yield
+            return
+        lock = self._tenant_locks.setdefault(tenant_id, asyncio.Lock())
+        async with lock:
+            token = self._held.set(held | {tenant_id})
+            try:
+                yield
+            finally:
+                self._held.reset(token)
 
     @asynccontextmanager
     async def transaction(self) -> AsyncIterator[None]:
@@ -292,3 +324,149 @@ class MemoryStore:
             if (entity is None or c.entity == entity) and (entity_id is None or c.entity_id == entity_id)
         ]
         return [_copy(c) for c in items[:limit]]
+
+    # ---- discovery and inventory ---------------------------------------------------------------
+
+    async def put_connector(self, connector):
+        self.connectors[connector.id] = _copy(connector)
+
+    async def get_connector(self, connector_id):
+        return _copy(self.connectors.get(connector_id))
+
+    async def list_connectors(self, tenant_id=None):
+        items = [c for c in self.connectors.values() if tenant_id is None or c.tenant_id == tenant_id]
+        return [_copy(c) for c in sorted(items, key=lambda c: (c.tenant_id, c.name, c.id))]
+
+    async def delete_connector(self, connector_id):
+        return self.connectors.pop(connector_id, None) is not None
+
+    async def update_connector_fields(self, connector_id, fields):
+        c = self.connectors.get(connector_id)
+        if c is not None:
+            for k, v in fields.items():
+                setattr(c, k, v)
+
+    async def claim_connector(self, connector_id, owner, now, lease_until, *, only_if_due=False):
+        c = self.connectors.get(connector_id)
+        if c is None or (c.lease_until is not None and c.lease_until > now):
+            return False
+        if only_if_due and (
+            not c.enabled or (c.last_run_at is not None and c.last_run_at + timedelta(minutes=c.interval_minutes) > now)
+        ):
+            return False
+        c.lease_owner, c.lease_until = owner, lease_until
+        return True
+
+    async def release_connector(self, connector_id, owner, *, status, error, finished_at):
+        c = self.connectors.get(connector_id)
+        if c is None or c.lease_owner != owner:
+            return
+        c.lease_owner, c.lease_until = None, None
+        c.last_run_at, c.last_status, c.last_error = finished_at, status, error
+
+    async def put_run(self, run):
+        self.runs[run.id] = _copy(run)
+
+    async def list_runs(self, connector_id, limit=20):
+        items = sorted(
+            (r for r in self.runs.values() if r.connector_id == connector_id), key=lambda r: r.started_at, reverse=True
+        )
+        return [_copy(r) for r in items[:limit]]
+
+    async def add_observations(self, observations):
+        self.observations.extend(_copy(o) for o in observations)
+
+    async def list_observations(self, tenant_id, *, entity_id=None, run_id=None, limit=100):
+        items = [
+            o
+            for o in self.observations
+            if o.tenant_id == tenant_id
+            and (entity_id is None or o.entity_id == entity_id)
+            and (run_id is None or o.run_id == run_id)
+        ]
+        items.sort(key=lambda o: o.observed_at, reverse=True)
+        return [_copy(o) for o in items[:limit]]
+
+    async def prune_observations(self, before):
+        keep = [o for o in self.observations if o.observed_at >= before]
+        removed = len(self.observations) - len(keep)
+        self.observations = keep
+        return removed
+
+    async def put_entity(self, entity):
+        self.entities[entity.id] = _copy(entity)
+
+    async def get_entity(self, tenant_id, entity_id):
+        e = self.entities.get(entity_id)
+        return _copy(e) if e is not None and e.tenant_id == tenant_id else None
+
+    async def delete_entity(self, tenant_id, entity_id):
+        e = self.entities.get(entity_id)
+        if e is None or e.tenant_id != tenant_id:
+            return False
+        del self.entities[entity_id]
+        return True
+
+    async def find_entities(self, tenant_id, keys):
+        wanted = set(keys)
+        return [
+            _copy(e) for e in self.entities.values() if e.tenant_id == tenant_id and wanted.intersection(e.strong_keys)
+        ]
+
+    async def find_entities_weak(self, tenant_id, keys):
+        wanted = set(keys)
+        return [
+            _copy(e) for e in self.entities.values() if e.tenant_id == tenant_id and wanted.intersection(e.weak_keys)
+        ]
+
+    async def list_entities(self, tenant_id, *, kind=None, state=None, agents_only=False, query=None, limit=500):
+        q = (query or "").lower()
+        items = [
+            e
+            for e in self.entities.values()
+            if e.tenant_id == tenant_id
+            and (kind is None or e.kind == kind)
+            and (state is None or e.state == state)
+            and (not agents_only or e.agent_likelihood != "none")
+            and (not q or q in e.name.lower() or any(q in k.lower() for k in e.strong_keys))
+        ]
+        items.sort(key=lambda e: (e.kind, e.name, e.id))
+        return [_copy(e) for e in items[:limit]]
+
+    async def put_edge(self, edge):
+        self.edges[edge.id] = _copy(edge)
+
+    async def list_edges(self, tenant_id, *, entity_ids=None, source=None, open_only=True, as_of=None):
+        ids = set(entity_ids) if entity_ids is not None else None
+        out = []
+        for e in self.edges.values():
+            if e.tenant_id != tenant_id or (source is not None and e.source != source):
+                continue
+            if ids is not None and e.src not in ids and e.dst not in ids:
+                continue
+            if as_of is not None:
+                if e.valid_from > as_of or (e.valid_to is not None and e.valid_to <= as_of):
+                    continue
+            elif open_only and e.valid_to is not None:
+                continue
+            out.append(_copy(e))
+        return sorted(out, key=lambda e: (e.valid_from, e.id))
+
+    async def put_finding(self, finding):
+        self.findings[finding.id] = _copy(finding)
+
+    async def get_finding(self, tenant_id, finding_id):
+        f = self.findings.get(finding_id)
+        return _copy(f) if f is not None and f.tenant_id == tenant_id else None
+
+    async def list_findings(self, tenant_id, *, status=None, entity_id=None, kind=None, limit=500):
+        items = [
+            f
+            for f in self.findings.values()
+            if f.tenant_id == tenant_id
+            and (status is None or f.status == status)
+            and (entity_id is None or f.entity_id == entity_id)
+            and (kind is None or f.kind == kind)
+        ]
+        items.sort(key=lambda f: f.created_at, reverse=True)
+        return [_copy(f) for f in items[:limit]]

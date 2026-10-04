@@ -10,6 +10,7 @@ from sqlalchemy import (
     Boolean,
     CheckConstraint,
     DateTime,
+    Float,
     ForeignKey,
     Index,
     Integer,
@@ -259,3 +260,142 @@ class Change(Base):
     before: Mapped[dict | None] = mapped_column(JSONB)
     after: Mapped[dict | None] = mapped_column(JSONB)
     at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+# ---- discovery and inventory (schema `inventory`, migration 0004) ------------------------------
+
+INV = "inventory"
+_TENANT_FK = f"{SCHEMA}.tenants.id"
+
+
+class Connector(Base):
+    __tablename__ = "connectors"
+    __table_args__ = {"schema": INV}
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(ForeignKey(_TENANT_FK, ondelete="CASCADE"), index=True)
+    kind: Mapped[str] = mapped_column(String(32))
+    name: Mapped[str] = mapped_column(String(100))
+    config: Mapped[dict] = mapped_column(JSONB)
+    environment: Mapped[str | None] = mapped_column(String(16))
+    interval_minutes: Mapped[int] = mapped_column(Integer)
+    enabled: Mapped[bool] = mapped_column(Boolean)
+    created_by: Mapped[str] = mapped_column(String(255))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    last_run_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_status: Mapped[str | None] = mapped_column(String(16))
+    last_error: Mapped[str | None] = mapped_column(Text)
+    lease_owner: Mapped[str | None] = mapped_column(String(128))
+    lease_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class SyncRun(Base):
+    __tablename__ = "sync_runs"
+    __table_args__ = (Index("ix_sync_runs_connector", "connector_id", "started_at"), {"schema": INV})
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(ForeignKey(_TENANT_FK, ondelete="CASCADE"))
+    connector_id: Mapped[str] = mapped_column(ForeignKey(f"{INV}.connectors.id", ondelete="CASCADE"))
+    triggered_by: Mapped[str] = mapped_column(String(255))
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    status: Mapped[str] = mapped_column(String(16))
+    observations: Mapped[int] = mapped_column(Integer)
+    entities_created: Mapped[int] = mapped_column(Integer)
+    entities_updated: Mapped[int] = mapped_column(Integer)
+    edges_opened: Mapped[int] = mapped_column(Integer)
+    edges_closed: Mapped[int] = mapped_column(Integer)
+    findings_opened: Mapped[int] = mapped_column(Integer)
+    findings_resolved: Mapped[int] = mapped_column(Integer)
+    warnings: Mapped[list[str]] = mapped_column(ARRAY(Text))
+    error: Mapped[str | None] = mapped_column(Text)
+
+
+class Observation(Base):
+    __tablename__ = "observations"
+    __table_args__ = (
+        Index("ix_observations_entity", "tenant_id", "entity_id", "observed_at"),
+        Index("ix_observations_time", "observed_at"),
+        {"schema": INV},
+    )
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(ForeignKey(_TENANT_FK, ondelete="CASCADE"))
+    connector_id: Mapped[str] = mapped_column(String(36))  # no FK: evidence outlives a deleted connector
+    run_id: Mapped[str] = mapped_column(String(36), index=True)
+    kind: Mapped[str] = mapped_column(String(64))
+    source_ref: Mapped[str] = mapped_column(Text)
+    observed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    payload_hash: Mapped[str] = mapped_column(String(64))
+    attrs: Mapped[dict] = mapped_column(JSONB)
+    entity_id: Mapped[str | None] = mapped_column(String(36))
+
+
+class Entity(Base):
+    __tablename__ = "entities"
+    __table_args__ = (
+        Index("ix_entities_strong_keys", "strong_keys", postgresql_using="gin"),
+        Index("ix_entities_weak_keys", "weak_keys", postgresql_using="gin"),
+        Index("ix_entities_tenant_state", "tenant_id", "state", "kind"),
+        {"schema": INV},
+    )
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(ForeignKey(_TENANT_FK, ondelete="CASCADE"))
+    kind: Mapped[str] = mapped_column(String(32))
+    name: Mapped[str] = mapped_column(Text)
+    strong_keys: Mapped[list[str]] = mapped_column(ARRAY(Text))
+    weak_keys: Mapped[list[str]] = mapped_column(ARRAY(Text))
+    attrs: Mapped[dict] = mapped_column(JSONB)
+    sources: Mapped[list[str]] = mapped_column(ARRAY(String))
+    environment: Mapped[str | None] = mapped_column(String(16))
+    first_seen: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    last_seen: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    agent_likelihood: Mapped[str] = mapped_column(String(16))
+    reasons: Mapped[list[str]] = mapped_column(ARRAY(Text))
+    state: Mapped[str] = mapped_column(String(32))
+    registry_agent_id: Mapped[str | None] = mapped_column(String(128))
+    owner_guess: Mapped[str | None] = mapped_column(String(255))
+    managed_volume: Mapped[int] = mapped_column(BigInteger)
+    direct_volume: Mapped[int] = mapped_column(BigInteger)
+    probable_matches: Mapped[list[str]] = mapped_column(ARRAY(String))
+    ignored_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    ignore_reason: Mapped[str | None] = mapped_column(Text)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class Edge(Base):
+    __tablename__ = "edges"
+    __table_args__ = (
+        Index("ix_edges_src", "tenant_id", "src", "valid_to"),
+        Index("ix_edges_dst", "tenant_id", "dst", "valid_to"),
+        Index("ix_edges_source", "tenant_id", "source", "valid_to"),
+        {"schema": INV},
+    )
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(ForeignKey(_TENANT_FK, ondelete="CASCADE"))
+    src: Mapped[str] = mapped_column(String(36))
+    dst: Mapped[str] = mapped_column(String(36))
+    kind: Mapped[str] = mapped_column(String(32))
+    attrs: Mapped[dict] = mapped_column(JSONB)
+    source: Mapped[str] = mapped_column(String(36))
+    confidence: Mapped[float] = mapped_column(Float)
+    valid_from: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    valid_to: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_seen: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    evidence_ref: Mapped[str | None] = mapped_column(String(36))
+
+
+class Finding(Base):
+    __tablename__ = "findings"
+    __table_args__ = (Index("ix_findings_tenant_status", "tenant_id", "status", "created_at"), {"schema": INV})
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(ForeignKey(_TENANT_FK, ondelete="CASCADE"))
+    entity_id: Mapped[str] = mapped_column(String(36), index=True)
+    kind: Mapped[str] = mapped_column(String(32))
+    severity: Mapped[str] = mapped_column(String(8))
+    summary: Mapped[str] = mapped_column(Text)
+    details: Mapped[dict] = mapped_column(JSONB)
+    status: Mapped[str] = mapped_column(String(16))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    resolved_by: Mapped[str | None] = mapped_column(String(255))
+    note: Mapped[str] = mapped_column(Text)

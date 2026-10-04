@@ -12,8 +12,10 @@ import { AdminKeysPage } from "./pages/AdminKeys";
 import { AnalyticsPage } from "./pages/Analytics";
 import { ApprovalsPage } from "./pages/Approvals";
 import { CatalogPage } from "./pages/Catalog";
+import { ConnectorsPage } from "./pages/Connectors";
 import { FleetPage } from "./pages/Fleet";
 import { GuardrailsPage } from "./pages/Guardrails";
+import { InventoryPage } from "./pages/Inventory";
 import { OverviewPage } from "./pages/Overview";
 import { PipelinePage } from "./pages/Pipeline";
 import { ReviewsPage } from "./pages/Reviews";
@@ -41,6 +43,13 @@ const NAV: NavItem[] = [
     visible: (s) => s.me.platform && (s.can("publish:request") || s.can("publish:approve") || s.can("read")),
     render: () => <ApprovalsPage />,
   },
+  {
+    path: "/inventory",
+    label: "Agent inventory",
+    group: "Operate",
+    visible: (s) => s.can("read") && s.me.features.discovery === true,
+    render: () => <InventoryPage />,
+  },
   { path: "/pipeline", label: "Pipeline", group: "Configure", visible: can("read"), render: () => <PipelinePage /> },
   {
     path: "/simulate",
@@ -51,6 +60,13 @@ const NAV: NavItem[] = [
   },
   { path: "/guardrails", label: "Guardrails", group: "Configure", visible: can("read"), render: () => <GuardrailsPage /> },
   { path: "/catalog", label: "Tenants & keys", group: "Configure", visible: can("read"), render: () => <CatalogPage /> },
+  {
+    path: "/connectors",
+    label: "Discovery connectors",
+    group: "Configure",
+    visible: (s) => s.can("read") && s.me.features.discovery === true,
+    render: () => <ConnectorsPage />,
+  },
   { path: "/fleet", label: "Gateways", group: "Observe", visible: can("read"), render: () => <FleetPage /> },
   {
     path: "/analytics",

@@ -10,6 +10,15 @@ import type {
   Assignment,
   AssignmentRecord,
   Change,
+  Connector,
+  ConnectorKind,
+  Coverage,
+  EntityDetail,
+  EntityState,
+  Finding,
+  FindingStatus,
+  InventoryEntity,
+  SyncRun,
   CreatedApiKey,
   DataClassification,
   Diff,
@@ -29,6 +38,7 @@ import type {
 } from "./types";
 
 export const API_PREFIX = "/cp/v1";
+export const INVENTORY_PREFIX = "/inv/v1";
 
 export class ApiError extends Error {
   readonly status: number;
@@ -81,14 +91,23 @@ export class Api {
     private readonly onUnauthorized: () => void = () => {},
   ) {}
 
-  async request<T>(method: string, path: string, body?: unknown, query?: Query): Promise<T> {
+  request<T>(method: string, path: string, body?: unknown, query?: Query): Promise<T> {
+    return this.send<T>(`${API_PREFIX}${path}`, method, body, query);
+  }
+
+  /** The discovery and inventory API lives next to /cp/v1, under /inv/v1. */
+  inventory<T>(method: string, path: string, body?: unknown, query?: Query): Promise<T> {
+    return this.send<T>(`${INVENTORY_PREFIX}${path}`, method, body, query);
+  }
+
+  private async send<T>(url: string, method: string, body?: unknown, query?: Query): Promise<T> {
     const headers: Record<string, string> = { "X-Admin-Key": this.key, Accept: "application/json" };
     const init: RequestInit = { method, headers, credentials: "omit", cache: "no-store" };
     if (body !== undefined) {
       headers["Content-Type"] = "application/json";
       init.body = JSON.stringify(body);
     }
-    const res = await this.fetchFn(`${API_PREFIX}${path}${queryString(query)}`, init);
+    const res = await this.fetchFn(`${url}${queryString(query)}`, init);
     if (res.status === 401) this.onUnauthorized();
     if (!res.ok) throw await toApiError(res);
     if (res.status === 204) return undefined as T;
@@ -284,5 +303,98 @@ export class Api {
     };
   }) {
     return this.request<SimulationResult>("POST", "/simulate", body);
+  }
+
+  // ---- discovery and inventory
+  connectorKinds() {
+    return this.inventory<ConnectorKind[]>("GET", "/connector-kinds");
+  }
+  connectors(tenant: string) {
+    return this.inventory<Connector[]>("GET", `/tenants/${encodeURIComponent(tenant)}/connectors`);
+  }
+  createConnector(
+    tenant: string,
+    body: {
+      kind: string;
+      name: string;
+      config: Record<string, unknown>;
+      environment: Environment | null;
+      interval_minutes: number;
+      enabled: boolean;
+    },
+  ) {
+    return this.inventory<Connector>("POST", `/tenants/${encodeURIComponent(tenant)}/connectors`, body);
+  }
+  updateConnector(
+    tenant: string,
+    id: string,
+    patch: Partial<Pick<Connector, "name" | "config" | "environment" | "interval_minutes" | "enabled">>,
+  ) {
+    return this.inventory<Connector>(
+      "PATCH",
+      `/tenants/${encodeURIComponent(tenant)}/connectors/${encodeURIComponent(id)}`,
+      patch,
+    );
+  }
+  deleteConnector(tenant: string, id: string) {
+    return this.inventory<void>("DELETE", `/tenants/${encodeURIComponent(tenant)}/connectors/${encodeURIComponent(id)}`);
+  }
+  syncConnector(tenant: string, id: string) {
+    return this.inventory<SyncRun>(
+      "POST",
+      `/tenants/${encodeURIComponent(tenant)}/connectors/${encodeURIComponent(id)}/sync`,
+    );
+  }
+  connectorRuns(tenant: string, id: string, limit = 20) {
+    return this.inventory<SyncRun[]>(
+      "GET",
+      `/tenants/${encodeURIComponent(tenant)}/connectors/${encodeURIComponent(id)}/runs`,
+      undefined,
+      { limit },
+    );
+  }
+  entities(tenant: string, filter: { kind?: string; state?: EntityState | ""; agents_only?: boolean; q?: string } = {}) {
+    return this.inventory<InventoryEntity[]>("GET", `/tenants/${encodeURIComponent(tenant)}/entities`, undefined, filter);
+  }
+  entity(tenant: string, id: string) {
+    return this.inventory<EntityDetail>("GET", `/tenants/${encodeURIComponent(tenant)}/entities/${encodeURIComponent(id)}`);
+  }
+  linkEntity(tenant: string, id: string, agentId: string) {
+    return this.inventory<InventoryEntity>(
+      "POST",
+      `/tenants/${encodeURIComponent(tenant)}/entities/${encodeURIComponent(id)}/link`,
+      { agent_id: agentId },
+    );
+  }
+  registerEntity(
+    tenant: string,
+    id: string,
+    body: { agent_id: string; base_trust_score: number; allowed_tools: string[]; owner?: string | null },
+  ) {
+    return this.inventory<InventoryEntity>(
+      "POST",
+      `/tenants/${encodeURIComponent(tenant)}/entities/${encodeURIComponent(id)}/register`,
+      body,
+    );
+  }
+  ignoreEntity(tenant: string, id: string, reason: string, days: number) {
+    return this.inventory<InventoryEntity>(
+      "POST",
+      `/tenants/${encodeURIComponent(tenant)}/entities/${encodeURIComponent(id)}/ignore`,
+      { reason, days },
+    );
+  }
+  coverage(tenant: string, environment?: Environment | "") {
+    return this.inventory<Coverage>("GET", `/tenants/${encodeURIComponent(tenant)}/coverage`, undefined, { environment });
+  }
+  findings(tenant: string, filter: { status?: FindingStatus | "all"; kind?: string } = {}) {
+    return this.inventory<Finding[]>("GET", `/tenants/${encodeURIComponent(tenant)}/findings`, undefined, filter);
+  }
+  updateFinding(tenant: string, id: string, status: FindingStatus, note: string) {
+    return this.inventory<Finding>(
+      "PATCH",
+      `/tenants/${encodeURIComponent(tenant)}/findings/${encodeURIComponent(id)}`,
+      { status, note },
+    );
   }
 }

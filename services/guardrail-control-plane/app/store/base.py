@@ -11,6 +11,14 @@ from contextlib import AbstractAsyncContextManager
 from datetime import datetime
 from typing import Protocol
 
+from ..domain.inventory import (
+    ConnectorRecord,
+    EdgeRecord,
+    EntityRecord,
+    FindingRecord,
+    ObservationRecord,
+    SyncRunRecord,
+)
 from ..domain.records import (
     ActionRecord,
     AdminKeyRecord,
@@ -35,6 +43,11 @@ class Conflict(Exception):
 
 class Store(Protocol):
     def transaction(self) -> AbstractAsyncContextManager[None]: ...
+
+    def tenant_lock(self, tenant_id: str) -> AbstractAsyncContextManager[None]:
+        """Serialises inventory writes for one tenant (discovery runs, reconciles, operator actions)
+        across tasks and replicas. Re-entrant within one task."""
+        ...
 
     # tenants
     async def get_tenant(self, tenant_id: str) -> TenantRecord | None: ...
@@ -126,3 +139,89 @@ class Store(Protocol):
     async def list_changes(
         self, entity: str | None = None, entity_id: str | None = None, limit: int = 100
     ) -> list[ChangeRecord]: ...
+
+    # ---- discovery and inventory (schema `inventory`) ----------------------------------------
+
+    async def put_connector(self, connector: ConnectorRecord) -> None: ...
+    async def get_connector(self, connector_id: str) -> ConnectorRecord | None: ...
+    async def list_connectors(self, tenant_id: str | None = None) -> list[ConnectorRecord]: ...
+    async def delete_connector(self, connector_id: str) -> bool: ...
+    async def update_connector_fields(self, connector_id: str, fields: dict[str, object]) -> None:
+        """Change only these columns (never the lease or the last-run outcome a run may be writing)."""
+        ...
+
+    async def claim_connector(
+        self, connector_id: str, owner: str, now: datetime, lease_until: datetime, *, only_if_due: bool = False
+    ) -> bool:
+        """Atomically take the run lease if nobody holds an unexpired one. False = already running.
+        only_if_due: also require the interval to have passed since the last run (scheduler ticks,
+        so two replicas that both listed the connector as due don't run it back to back)."""
+        ...
+
+    async def release_connector(
+        self, connector_id: str, owner: str, *, status: str, error: str | None, finished_at: datetime
+    ) -> None:
+        """Drop the lease (only if `owner` still holds it) and record the run's outcome."""
+        ...
+
+    async def put_run(self, run: SyncRunRecord) -> None: ...
+    async def list_runs(self, connector_id: str, limit: int = 20) -> list[SyncRunRecord]: ...
+
+    async def add_observations(self, observations: list[ObservationRecord]) -> None: ...
+    async def list_observations(
+        self, tenant_id: str, *, entity_id: str | None = None, run_id: str | None = None, limit: int = 100
+    ) -> list[ObservationRecord]:
+        """Newest first."""
+        ...
+
+    async def prune_observations(self, before: datetime) -> int: ...
+
+    async def put_entity(self, entity: EntityRecord) -> None: ...
+    async def get_entity(self, tenant_id: str, entity_id: str) -> EntityRecord | None: ...
+    async def delete_entity(self, tenant_id: str, entity_id: str) -> bool:
+        """Only used when two entities turn out to be one (merge); evidence keeps the old id."""
+        ...
+
+    async def find_entities(self, tenant_id: str, keys: list[str]) -> list[EntityRecord]:
+        """Entities whose strong keys overlap `keys`."""
+        ...
+
+    async def find_entities_weak(self, tenant_id: str, keys: list[str]) -> list[EntityRecord]:
+        """Entities whose weak keys overlap `keys`."""
+        ...
+
+    async def list_entities(
+        self,
+        tenant_id: str,
+        *,
+        kind: str | None = None,
+        state: str | None = None,
+        agents_only: bool = False,
+        query: str | None = None,
+        limit: int = 500,
+    ) -> list[EntityRecord]: ...
+
+    async def put_edge(self, edge: EdgeRecord) -> None: ...
+    async def list_edges(
+        self,
+        tenant_id: str,
+        *,
+        entity_ids: list[str] | None = None,
+        source: str | None = None,
+        open_only: bool = True,
+        as_of: datetime | None = None,
+    ) -> list[EdgeRecord]:
+        """Edges touching any of `entity_ids` (as src or dst). `as_of` = valid at that time."""
+        ...
+
+    async def put_finding(self, finding: FindingRecord) -> None: ...
+    async def get_finding(self, tenant_id: str, finding_id: str) -> FindingRecord | None: ...
+    async def list_findings(
+        self,
+        tenant_id: str,
+        *,
+        status: str | None = None,
+        entity_id: str | None = None,
+        kind: str | None = None,
+        limit: int = 500,
+    ) -> list[FindingRecord]: ...

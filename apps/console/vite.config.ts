@@ -14,7 +14,10 @@ export default defineConfig({
   },
   server: {
     port: 5173,
-    proxy: { "/cp": process.env.CONTROL_PLANE_URL ?? "http://localhost:8200" },
+    proxy: {
+      "/cp": process.env.CONTROL_PLANE_URL ?? "http://localhost:8200",
+      "/inv": process.env.CONTROL_PLANE_URL ?? "http://localhost:8200",
+    },
   },
   test: {
     environment: "node",

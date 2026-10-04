@@ -149,6 +149,24 @@ controlPlane:
   # This release's gateway is added for global.environment and is the fallback.
   gatewayUrls: {}
   analytics: true                   # reads the audit log through AUDIT_DSN
+  # Agent discovery (docs/discovery.md). Connectors are configured in the console or /inv/v1.
+  discovery:
+    scheduler: true                 # run due connectors (a lease per connector: safe with replicas)
+    tickSeconds: 60
+    maxObservations: 20000
+    allowHttp: false                # connectors refuse plain http:// URLs
+    # Secret keys (in the platform Secret) passed to the control plane for connectors to name,
+    # e.g. [DISCOVERY_SECRET_OPENAI_ADMIN, DISCOVERY_SECRET_MCP_TOKEN]. Names must start with
+    # DISCOVERY_SECRET_; connectors can't read any other variable.
+    secretKeys: []
+    kubernetes:
+      # In-cluster connector: a read-only ClusterRole (pods, kagent agents) in ALL namespaces. The
+      # control plane is multi-tenant: any tenant's kubernetes connector reads this cluster, so give
+      # it to one tenant (platform admins configure connectors) or use namespaces per connector.
+      enabled: false
+      apiServerCIDRs: []            # required when enabled: the API server's addresses (egress 443/6443)
+    logs:
+      existingClaim: ""             # PVC with DNS query logs, mounted read-only for the dns_log connector
   extraEnv: []
   resources:
     requests: {cpu: 100m, memory: 192Mi}

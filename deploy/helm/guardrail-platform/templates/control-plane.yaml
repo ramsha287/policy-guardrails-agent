@@ -2,6 +2,9 @@
 {{- $c := dict "root" $ "component" "control-plane" -}}
 {{- $cp := .Values.controlPlane -}}
 {{- $app := eq .Values.mtls.mode "app" -}}
+{{- $disc := $cp.discovery | default dict -}}
+{{- $k8s := ($disc.kubernetes | default dict).enabled | default false -}}
+{{- $logs := ($disc.logs | default dict).existingClaim | default "" -}}
 {{- $gatewayUrls := dict -}}
 {{- if .Values.gateway.enabled -}}
 {{- $_ := set $gatewayUrls .Values.global.environment (include "gp.gatewayInternalUrl" $) -}}
@@ -14,7 +17,37 @@ kind: ServiceAccount
 metadata:
   name: {{ include "gp.name" $c }}
   labels: {{- include "gp.labels" $c | nindent 4 }}
-automountServiceAccountToken: false
+automountServiceAccountToken: {{ $k8s }}
+{{- if $k8s }}
+---
+# Discovery's Kubernetes connector: read-only, pod specs only (never secrets or configmaps).
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "gp.name" $c }}-discovery
+  labels: {{- include "gp.labels" $c | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: [pods]
+    verbs: [get, list]
+  - apiGroups: [kagent.dev]
+    resources: [agents]
+    verbs: [get, list]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "gp.name" $c }}-discovery
+  labels: {{- include "gp.labels" $c | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "gp.name" $c }}-discovery
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "gp.name" $c }}
+    namespace: {{ .Release.Namespace }}
+{{- end }}
 ---
 apiVersion: v1
 kind: Service
@@ -54,7 +87,7 @@ spec:
       {{- end }}
     spec:
       serviceAccountName: {{ include "gp.name" $c }}
-      automountServiceAccountToken: false
+      automountServiceAccountToken: {{ $k8s }}
       securityContext: {{- toYaml .Values.podSecurityContext | nindent 8 }}
       {{- include "gp.scheduling" $ | nindent 6 }}
       initContainers:
@@ -103,6 +136,19 @@ spec:
             {{- end }}
             - {name: GATEWAY_URLS, value: {{ $gatewayUrls | toJson | quote }}}
             {{- include "gp.mtlsEnv" (dict "root" $ "internalPort" $cp.internalPort) | nindent 12 }}
+            - {name: DISCOVERY_SCHEDULER, value: {{ ternary "true" "false" (ne (toString $disc.scheduler) "false") | quote }}}
+            - {name: DISCOVERY_TICK_SECONDS, value: {{ $disc.tickSeconds | default 60 | quote }}}
+            - {name: DISCOVERY_MAX_OBSERVATIONS, value: {{ $disc.maxObservations | default 20000 | int64 | quote }}}
+            - {name: DISCOVERY_ALLOW_HTTP, value: {{ $disc.allowHttp | default false | toString | quote }}}
+            {{- if $logs }}
+            - {name: DISCOVERY_LOG_DIR, value: /var/lib/guardrail-discovery/logs}
+            {{- end }}
+            {{- range $disc.secretKeys | default list }}
+            {{- if not (hasPrefix "DISCOVERY_SECRET_" .) }}
+            {{- fail (printf "controlPlane.discovery.secretKeys: %s must start with DISCOVERY_SECRET_" .) }}
+            {{- end }}
+            {{- include "gp.secretEnv" (dict "root" $ "name" . "optional" true) | nindent 12 }}
+            {{- end }}
             {{- with $cp.extraEnv }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
@@ -123,9 +169,16 @@ spec:
             {{- if $app }}
             - {name: certs, mountPath: /certs, readOnly: true}
             {{- end }}
+            {{- if $logs }}
+            - {name: discovery-logs, mountPath: /var/lib/guardrail-discovery/logs, readOnly: true}
+            {{- end }}
       volumes:
         - name: tmp
           emptyDir: {sizeLimit: 64Mi}
+        {{- if $logs }}
+        - name: discovery-logs
+          persistentVolumeClaim: {claimName: {{ $logs | quote }}, readOnly: true}
+        {{- end }}
         {{- if $app }}
         - name: certs
           secret:

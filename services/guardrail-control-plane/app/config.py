@@ -34,6 +34,14 @@ class Settings(BaseSettings):
     # Optional read-only DSN for analytics over the gateway's audit schema
     audit_dsn: str | None = Field(None, alias="AUDIT_DSN")
 
+    # Agent discovery (app/discovery). Connectors run on a schedule in every replica; a lease per
+    # connector makes sure only one replica runs it at a time.
+    discovery_scheduler: bool = Field(True, alias="DISCOVERY_SCHEDULER")
+    discovery_tick_seconds: float = Field(60.0, ge=5, alias="DISCOVERY_TICK_SECONDS")
+    discovery_max_observations: int = Field(20_000, ge=100, alias="DISCOVERY_MAX_OBSERVATIONS")
+    # Connectors refuse plain http:// URLs unless this is set (labs only).
+    discovery_allow_http: bool = Field(False, alias="DISCOVERY_ALLOW_HTTP")
+
     # Built console (apps/console/dist). Served at /console when the directory exists.
     console_dir: str = Field("/app/console", alias="CONSOLE_DIR")
 

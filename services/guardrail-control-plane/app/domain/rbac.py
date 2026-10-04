@@ -22,6 +22,10 @@ class Permission(str, Enum):
     REVIEWS_DECIDE = "reviews:decide"
     REVIEWS_RAW = "reviews:raw"
     ADMIN_KEYS = "admin-keys:write"
+    # Discovery: connectors hold infrastructure credentials and call URLs, so configuring them is
+    # platform-only; acting on the inventory (link, register, ignore, findings) is per tenant.
+    DISCOVERY_WRITE = "discovery:write"
+    INVENTORY_WRITE = "inventory:write"
 
 
 ROLE_PERMISSIONS: dict[str, frozenset[Permission]] = {
@@ -29,7 +33,13 @@ ROLE_PERMISSIONS: dict[str, frozenset[Permission]] = {
     "reviewer": frozenset({Permission.READ, Permission.REVIEWS_DECIDE}),
     "reviewer-raw": frozenset({Permission.READ, Permission.REVIEWS_DECIDE, Permission.REVIEWS_RAW}),
     "editor": frozenset(
-        {Permission.READ, Permission.CATALOG_WRITE, Permission.ASSIGNMENTS_WRITE, Permission.PUBLISH_REQUEST}
+        {
+            Permission.READ,
+            Permission.CATALOG_WRITE,
+            Permission.ASSIGNMENTS_WRITE,
+            Permission.PUBLISH_REQUEST,
+            Permission.INVENTORY_WRITE,
+        }
     ),
     "admin": frozenset(
         {
@@ -41,11 +51,15 @@ ROLE_PERMISSIONS: dict[str, frozenset[Permission]] = {
             Permission.PUBLISH_APPROVE,
             Permission.REVIEWS_DECIDE,
             Permission.ADMIN_KEYS,
+            Permission.DISCOVERY_WRITE,
+            Permission.INVENTORY_WRITE,
         }
     ),
 }
 ROLES = frozenset(ROLE_PERMISSIONS)
-PLATFORM_ONLY = frozenset({Permission.REGISTRY_WRITE, Permission.PUBLISH_REQUEST, Permission.PUBLISH_APPROVE})
+PLATFORM_ONLY = frozenset(
+    {Permission.REGISTRY_WRITE, Permission.PUBLISH_REQUEST, Permission.PUBLISH_APPROVE, Permission.DISCOVERY_WRITE}
+)
 
 
 class Forbidden(Exception):

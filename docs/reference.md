@@ -56,6 +56,10 @@ Other endpoints (same `X-API-Key`):
 
 Ops endpoints: `GET /health`, `GET /ready`, `GET /version`, `GET /metrics` (Prometheus).
 
+The control plane serves its admin API at `/cp/v1` and the discovery and inventory API at
+`/inv/v1` (connectors, runs, entities, relations graph, coverage, findings): see
+[discovery.md](discovery.md#api).
+
 **Proxy mode** (`PROXY_ENABLED=true`): `POST /v1/chat/completions` is OpenAI-compatible. Point an
 OpenAI client at the gateway with a gateway key. The input stage checks the messages, then the
 gateway calls the provider with its own key, and the output and tool stages check the answer and

@@ -134,8 +134,13 @@ services:
       TWO_PERSON_ENVIRONMENTS: '["production"]'
       GATEWAY_URL: http://guardrail-gateway:8100
       AUDIT_DSN: postgresql+asyncpg://${POSTGRES_USER:-gateway}:${POSTGRES_PASSWORD:-gateway}@postgres:5432/${POSTGRES_DB:-gateway}
+      # Agent discovery (docs/discovery.md). Dev only: the demo MCP server speaks plain http.
+      DISCOVERY_ALLOW_HTTP: "true"
+      DISCOVERY_LOG_DIR: /var/lib/guardrail-discovery/logs
     volumes:
       - bootstrap:/bootstrap
+      # DNS query logs for the dns_log connector (python examples/discovery/make_dns_log.py)
+      - ./examples/discovery/logs:/var/lib/guardrail-discovery/logs:ro
     ports:
       - "8200:8200"
     depends_on:
@@ -199,6 +204,15 @@ services:
       interval: 5s
       timeout: 3s
       retries: 30
+
+  # Demo MCP server for the discovery `mcp` connector: `docker compose --profile discovery-demo up -d`.
+  # Edit examples/discovery/tools.json to simulate a changed tool definition.
+  mcp-demo:
+    image: python:3.12-slim
+    profiles: ["discovery-demo"]
+    command: ["python", "/demo/mcp_demo_server.py", "--port", "8765"]
+    volumes:
+      - ./examples/discovery:/demo:ro
 
 volumes:
   postgres_data:

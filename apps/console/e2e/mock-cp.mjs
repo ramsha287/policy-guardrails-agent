@@ -19,6 +19,7 @@ const args = Object.fromEntries(
 const PORT = Number(args.port ?? 8200);
 const DIST = args.dist ?? null;
 const PREFIX = "/cp/v1";
+const INV_PREFIX = "/inv/v1";
 const CSP =
   "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; " +
   "connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'";
@@ -28,10 +29,10 @@ const PERMS = {
   viewer: ["read"],
   reviewer: ["read", "reviews:decide"],
   "reviewer-raw": ["read", "reviews:decide", "reviews:raw"],
-  editor: ["read", "catalog:write", "assignments:write", "publish:request"],
-  admin: ["read", "catalog:write", "registry:write", "assignments:write", "publish:request", "publish:approve", "reviews:decide", "admin-keys:write"],
+  editor: ["read", "catalog:write", "assignments:write", "publish:request", "inventory:write"],
+  admin: ["read", "catalog:write", "registry:write", "assignments:write", "publish:request", "publish:approve", "reviews:decide", "admin-keys:write", "discovery:write", "inventory:write"],
 };
-const PLATFORM_ONLY = new Set(["registry:write", "publish:request", "publish:approve"]);
+const PLATFORM_ONLY = new Set(["registry:write", "publish:request", "publish:approve", "discovery:write"]);
 
 const now = () => new Date().toISOString();
 const ago = (min) => new Date(Date.now() - min * 60_000).toISOString();
@@ -299,7 +300,7 @@ route("GET", "/me", ({ p }) => ({
   environments: ENVS,
   two_person_environments: ["production"],
   review_ttl_minutes: 15,
-  features: { simulate: true, analytics: true },
+  features: { simulate: true, analytics: true, discovery: true },
 }));
 
 route("GET", "/reviews", ({ p, query }) => {
@@ -625,6 +626,157 @@ route("POST", "/simulate", ({ p, body }) => {
   };
 });
 
+// ---- discovery and inventory (/inv/v1) -----------------------------------------------------------
+
+const KINDS = [
+  ["gateway", "Guardrail gateway (audit log)", "Agents calling through the guardrail gateway.", { lookback_hours: { type: "integer" } }],
+  ["kubernetes", "Kubernetes workloads", "Workloads with model-provider keys, agent frameworks and MCP use.", { cluster: { type: "string" } }],
+  ["dns_log", "DNS query logs", "Workloads resolving model-provider and MCP hosts.", { path: { type: "string" } }],
+  ["openai_admin", "OpenAI organization", "Projects, service accounts and API keys.", { admin_key_env: { type: "string" } }],
+  ["aws_bedrock", "Amazon Bedrock and AgentCore", "Bedrock Agents and AgentCore runtimes.", { regions: { type: "array" } }],
+  ["mcp", "MCP servers (tools/list)", "Pins tool definitions; a change opens a finding.", { servers: { type: "array" } }],
+].map(([kind, title, description, properties]) => ({ kind, title, description, full_snapshot: kind !== "gateway" && kind !== "dns_log", config_schema: { type: "object", properties } }));
+
+const src = (kind, connector, signals, min, extra = {}) => ({ kind, connector, signals, attrs: {}, managed: 0, direct: 0, at: ago(min), ...extra });
+const ent = (tenant_id, name, kind, state, extra = {}) => ({
+  id: randomUUID(), tenant_id, name, kind, state, strong_keys: [], weak_keys: [], attrs: { by_source: {} }, sources: [],
+  environment: "production", first_seen: ago(60 * 24 * 9), last_seen: ago(20), agent_likelihood: state === "not_agent" ? "none" : "confirmed",
+  reasons: [], registry_agent_id: null, owner_guess: null, managed_volume: 0, direct_volume: 0, probable_matches: [],
+  ignored_until: null, ignore_reason: null, updated_at: ago(20), ...extra,
+});
+state.connectors = [
+  { id: randomUUID(), tenant_id: "demo", kind: "gateway", name: "Gateway audit", config: { lookback_hours: 24 }, environment: "production", interval_minutes: 60, enabled: true, created_by: "alice", created_at: ago(60 * 24 * 9), updated_at: ago(60 * 24 * 9), last_run_at: ago(25), last_status: "ok", last_error: null, lease_until: null },
+  { id: randomUUID(), tenant_id: "demo", kind: "kubernetes", name: "prod-1 cluster", config: { cluster: "prod-1" }, environment: "production", interval_minutes: 30, enabled: true, created_by: "alice", created_at: ago(60 * 24 * 9), updated_at: ago(60 * 24 * 9), last_run_at: ago(12), last_status: "partial", last_error: null, lease_until: null },
+];
+state.runs = state.connectors.map((c) => ({ id: randomUUID(), tenant_id: c.tenant_id, connector_id: c.id, triggered_by: "schedule", started_at: c.last_run_at, finished_at: c.last_run_at, status: c.last_status, observations: 14, entities_created: 2, entities_updated: 12, edges_opened: 3, edges_closed: 1, findings_opened: 1, findings_resolved: 0, warnings: c.last_status === "partial" ? ["kagent agents: 403"] : [], error: null }));
+const [gwC, k8sC] = state.connectors;
+state.entities = [
+  ent("demo", "research-agent", "agent", "managed", { registry_agent_id: "research-agent", owner_guess: "data-team", strong_keys: ["agent:research-agent"], managed_volume: 1820, reasons: ["registered in the agent registry", "registered and calling through the guardrail gateway"], attrs: { by_source: { [gwC.id]: src("gateway", gwC.name, ["gateway_client", "calls_model", "uses_tools"], 25, { managed: 1820 }), registry: src("registry", "registry", ["registered"], 0) } } }),
+  ent("demo", "apps/crm-bot", "workload", "shadow", { owner_guess: "sales-eng", strong_keys: ["k8s:prod-1/apps/Deployment/crm-bot"], direct_volume: 0, reasons: ["calls a model and uses tools or data", "agent-like behaviour with no registry entry"], attrs: { by_source: { [k8sC.id]: src("kubernetes", k8sC.name, ["calls_model", "direct_model_access", "uses_tools"], 12) } } }),
+  ent("demo", "apps/summarizer", "workload", "registered_unmanaged", { registry_agent_id: "summarizer", strong_keys: ["k8s:prod-1/apps/Deployment/summarizer", "agent:summarizer"], reasons: ["registered, but calls a model provider without the gateway"], attrs: { by_source: { [k8sC.id]: src("kubernetes", k8sC.name, ["calls_model", "direct_model_access"], 12) } } }),
+  ent("demo", "nightly-report", "agent", "stale", { registry_agent_id: "nightly-report", last_seen: ago(60 * 24 * 40), reasons: ["registered, last observed 40 days ago"] }),
+  ent("demo", "public.customers", "datastore", "not_agent", { strong_keys: ["datastore:public.customers"] }),
+  ent("acme", "support-bot", "agent", "managed", { registry_agent_id: "support-bot", managed_volume: 230 }),
+];
+const finding = (e, kind, severity, summary) => ({ id: randomUUID(), tenant_id: e.tenant_id, entity_id: e.id, kind, severity, summary, details: {}, status: "open", created_at: ago(60), updated_at: ago(60), resolved_at: null, resolved_by: null, note: "" });
+state.findings = [
+  finding(state.entities[1], "shadow_agent", "high", "Unregistered agent apps/crm-bot in production"),
+  finding(state.entities[2], "unmanaged_agent", "medium", "Registered agent summarizer calls models around the gateway in production"),
+  finding(state.entities[3], "stale_agent", "low", "Registered agent nightly-report not seen for 30 days"),
+];
+
+const invRoutes = [];
+const invRoute = (method, pattern, handler) => {
+  const keys = [];
+  const re = new RegExp(`^${pattern.replace(/:([a-z_]+)/g, (_, k) => (keys.push(k), "([^/]+)"))}$`);
+  invRoutes.push({ method, re, keys, handler });
+};
+const findOr404 = (list, pred, what) => {
+  const x = list.find(pred);
+  if (!x) throw new HttpError(404, `${what} not found`);
+  return x;
+};
+invRoute("GET", "/connector-kinds", ({ p }) => (p.require("read", p.tenant_id), KINDS));
+invRoute("GET", "/tenants/:t/connectors", ({ p, params }) => (p.require("read", params.t), state.connectors.filter((c) => c.tenant_id === params.t)));
+invRoute("POST", "/tenants/:t/connectors", ({ p, params, body }) => {
+  p.require("discovery:write", params.t);
+  if (!KINDS.some((k) => k.kind === body?.kind)) throw new HttpError(422, `unknown connector kind ${body?.kind}`, { errors: ["see GET /inv/v1/connector-kinds"] });
+  const c = { id: randomUUID(), tenant_id: params.t, kind: body.kind, name: body.name, config: body.config ?? {}, environment: body.environment ?? null, interval_minutes: body.interval_minutes ?? 60, enabled: body.enabled ?? true, created_by: p.actor, created_at: now(), updated_at: now(), last_run_at: null, last_status: null, last_error: null, lease_until: null };
+  state.connectors.push(c);
+  return c;
+});
+invRoute("GET", "/tenants/:t/connectors/:id", ({ p, params }) => (p.require("read", params.t), findOr404(state.connectors, (c) => c.id === params.id && c.tenant_id === params.t, "connector")));
+invRoute("PATCH", "/tenants/:t/connectors/:id", ({ p, params, body }) => {
+  p.require("discovery:write", params.t);
+  const c = findOr404(state.connectors, (x) => x.id === params.id && x.tenant_id === params.t, "connector");
+  Object.assign(c, body, { updated_at: now() });
+  return c;
+});
+invRoute("DELETE", "/tenants/:t/connectors/:id", ({ p, params }) => {
+  p.require("discovery:write", params.t);
+  findOr404(state.connectors, (x) => x.id === params.id && x.tenant_id === params.t, "connector");
+  state.connectors = state.connectors.filter((x) => x.id !== params.id);
+  return null;
+});
+invRoute("POST", "/tenants/:t/connectors/:id/sync", ({ p, params }) => {
+  p.require("inventory:write", params.t);
+  const c = findOr404(state.connectors, (x) => x.id === params.id && x.tenant_id === params.t, "connector");
+  const run = { id: randomUUID(), tenant_id: c.tenant_id, connector_id: c.id, triggered_by: p.actor, started_at: now(), finished_at: now(), status: "ok", observations: 9, entities_created: 0, entities_updated: 9, edges_opened: 0, edges_closed: 0, findings_opened: 0, findings_resolved: 0, warnings: [], error: null };
+  state.runs.push(run);
+  Object.assign(c, { last_run_at: run.finished_at, last_status: "ok", last_error: null });
+  return run;
+});
+invRoute("GET", "/tenants/:t/connectors/:id/runs", ({ p, params }) => (p.require("read", params.t), state.runs.filter((r) => r.connector_id === params.id).sort((a, b) => b.started_at.localeCompare(a.started_at))));
+invRoute("GET", "/tenants/:t/entities", ({ p, params, query }) => {
+  p.require("read", params.t);
+  const q = (query.q ?? "").toLowerCase();
+  return state.entities.filter((e) => e.tenant_id === params.t && (!query.state || e.state === query.state) && (query.agents_only !== "true" || e.agent_likelihood !== "none") && (!q || e.name.toLowerCase().includes(q)));
+});
+invRoute("GET", "/tenants/:t/entities/:id", ({ p, params }) => {
+  p.require("read", params.t);
+  const e = findOr404(state.entities, (x) => x.id === params.id && x.tenant_id === params.t, "entity");
+  const ds = state.entities.find((x) => x.kind === "datastore" && x.tenant_id === e.tenant_id);
+  return {
+    entity: e,
+    evidence: [{ id: randomUUID(), connector_id: e.sources[0] ?? "c", run_id: "r", kind: e.kind === "agent" ? "gateway.agent_activity" : "k8s.workload", source_ref: e.strong_keys[0] ?? e.name, observed_at: e.last_seen, attrs: {} }],
+    relations: ds && e.kind !== "datastore" ? [{ edge: { id: randomUUID(), src: e.id, dst: ds.id, kind: "reads_from", attrs: {}, source: "c", confidence: 1, valid_from: e.first_seen, valid_to: null, last_seen: e.last_seen }, direction: "out", other: { id: ds.id, kind: ds.kind, name: ds.name, state: ds.state } }] : [],
+    findings: state.findings.filter((f) => f.entity_id === e.id),
+  };
+});
+const reconcile = (e) => {
+  if (e.registry_agent_id) {
+    e.state = e.managed_volume ? "managed" : "registered_unmanaged";
+    for (const f of state.findings) if (f.entity_id === e.id && f.kind === "shadow_agent" && f.status === "open") Object.assign(f, { status: "resolved", resolved_by: "discovery", resolved_at: now() });
+  }
+  return e;
+};
+invRoute("POST", "/tenants/:t/entities/:id/register", ({ p, params, body }) => {
+  p.require("inventory:write", params.t);
+  p.require("catalog:write", params.t);
+  const e = findOr404(state.entities, (x) => x.id === params.id && x.tenant_id === params.t, "entity");
+  if (state.agents.some((a) => a.tenant_id === params.t && a.agent_id === body.agent_id)) throw new HttpError(409, `agent ${body.agent_id} is already registered`);
+  state.agents.push({ tenant_id: params.t, agent_id: body.agent_id, base_trust_score: body.base_trust_score ?? 50, allowed_tools: body.allowed_tools ?? [], owner: body.owner ?? e.owner_guess, updated_at: now() });
+  e.registry_agent_id = body.agent_id;
+  return reconcile(e);
+});
+invRoute("POST", "/tenants/:t/entities/:id/link", ({ p, params, body }) => {
+  p.require("inventory:write", params.t);
+  const e = findOr404(state.entities, (x) => x.id === params.id && x.tenant_id === params.t, "entity");
+  findOr404(state.agents, (a) => a.tenant_id === params.t && a.agent_id === body.agent_id, "agent");
+  e.registry_agent_id = body.agent_id;
+  return reconcile(e);
+});
+invRoute("POST", "/tenants/:t/entities/:id/ignore", ({ p, params, body }) => {
+  p.require("inventory:write", params.t);
+  const e = findOr404(state.entities, (x) => x.id === params.id && x.tenant_id === params.t, "entity");
+  Object.assign(e, body.days ? { ignored_until: inMin(body.days * 24 * 60), ignore_reason: body.reason } : { ignored_until: null, ignore_reason: null });
+  return e;
+});
+invRoute("GET", "/tenants/:t/coverage", ({ p, params }) => {
+  p.require("read", params.t);
+  const agents = state.entities.filter((e) => e.tenant_id === params.t && e.agent_likelihood !== "none");
+  const by_state = { managed: 0, registered_unmanaged: 0, shadow: 0, stale: 0 };
+  for (const e of agents) by_state[e.state] += 1;
+  const active = agents.filter((e) => e.state !== "stale").length;
+  return {
+    tenant_id: params.t, environment: null, agents: agents.length, active_agents: active, by_state,
+    agent_coverage: active ? by_state.managed / active : null,
+    volume: { window_days: 7, gateway_requests: agents.reduce((n, e) => n + e.managed_volume, 0), direct_outside_gateway: params.t === "demo" ? { dns_lookups: 412 } : {} },
+    open_findings: state.findings.filter((f) => f.tenant_id === params.t && f.status === "open").length,
+    connectors: state.connectors.filter((c) => c.tenant_id === params.t).map(({ id, kind, name, last_run_at, last_status }) => ({ id, kind, name, last_run_at, last_status })),
+  };
+});
+invRoute("GET", "/tenants/:t/findings", ({ p, params, query }) => {
+  p.require("read", params.t);
+  const status = query.status ?? "open";
+  return state.findings.filter((f) => f.tenant_id === params.t && (status === "all" || f.status === status));
+});
+invRoute("PATCH", "/tenants/:t/findings/:id", ({ p, params, body }) => {
+  p.require("inventory:write", params.t);
+  const f = findOr404(state.findings, (x) => x.id === params.id && x.tenant_id === params.t, "finding");
+  return Object.assign(f, { status: body.status, note: body.note ?? "", updated_at: now(), resolved_at: body.status === "open" ? null : now(), resolved_by: body.status === "open" ? null : p.actor });
+});
+
 // ---- server -----------------------------------------------------------------------------------------
 
 const MIME = { ".html": "text/html; charset=utf-8", ".js": "text/javascript", ".css": "text/css", ".svg": "image/svg+xml", ".json": "application/json" };
@@ -655,12 +807,13 @@ function serveStatic(req, res, pathname) {
 createServer(async (req, res) => {
   const url = new URL(req.url, "http://localhost");
   if (serveStatic(req, res, url.pathname)) return;
-  if (!url.pathname.startsWith(PREFIX)) {
+  const inv = url.pathname.startsWith(INV_PREFIX);
+  if (!url.pathname.startsWith(PREFIX) && !inv) {
     res.writeHead(404).end();
     return;
   }
-  const path = url.pathname.slice(PREFIX.length);
-  const match = routes
+  const path = url.pathname.slice((inv ? INV_PREFIX : PREFIX).length);
+  const match = (inv ? invRoutes : routes)
     .map((r) => ({ r, m: r.method === req.method ? path.match(r.re) : null }))
     .find((x) => x.m);
   const send = (status, data) => {
@@ -683,7 +836,8 @@ createServer(async (req, res) => {
     const params = Object.fromEntries(match.r.keys.map((k, i) => [k, decodeURIComponent(match.m[i + 1])]));
     const out = await match.r.handler({ p, params, query: Object.fromEntries(url.searchParams), body });
     if (out === null) return send(204);
-    return send(req.method === "POST" && /\/(tenants|admin-keys|guardrails\/versions|api-keys)$/.test(path) ? 201 : 200, out);
+    const created = /\/(tenants|admin-keys|guardrails\/versions|api-keys)$/.test(path) || (inv && /\/(connectors|register)$/.test(path));
+    return send(req.method === "POST" && created ? 201 : 200, out);
   } catch (e) {
     if (e instanceof HttpError) return send(e.status, { error: e.message, ...e.extra });
     console.error(e);

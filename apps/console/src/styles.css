@@ -1398,3 +1398,28 @@ details > summary.muted {
     display: none;
   }
 }
+
+/* ---- agent inventory ---------------------------------------------------------------------------- */
+
+.plain-list {
+  margin: 0;
+  padding-left: 18px;
+  display: grid;
+  gap: 4px;
+}
+
+button.stat {
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+button.stat:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+.config-help {
+  max-height: 180px;
+  overflow: auto;
+}

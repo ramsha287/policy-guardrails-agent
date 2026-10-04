@@ -1,0 +1,13 @@
+[
+  {
+    "name": "lookup_customer",
+    "description": "Find a customer record by email address. Returns name, plan and region.",
+    "inputSchema": {"type": "object", "properties": {"email": {"type": "string"}}, "required": ["email"]},
+    "annotations": {"readOnlyHint": true}
+  },
+  {
+    "name": "create_ticket",
+    "description": "Open a support ticket for a customer.",
+    "inputSchema": {"type": "object", "properties": {"email": {"type": "string"}, "subject": {"type": "string"}}}
+  }
+]

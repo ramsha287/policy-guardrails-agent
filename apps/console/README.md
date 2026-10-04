@@ -8,11 +8,13 @@ at `/console` (and `/review` redirects to the review queue). There is no separat
 | --- | --- |
 | Overview | What needs attention: held requests, publishes to approve, unhealthy gateways, last 24 h |
 | Review queue | Approve or reject escalated requests before they expire (reviewer roles) |
+| Agent inventory | Discovered agents by state (managed, shadow, unmanaged, stale), coverage, findings; register, link or ignore |
 | Publish approvals | Second-person approval of production publishes and rollbacks |
 | Pipeline | Assignments per environment, shadow/enforce toggles, diff, publish, rollback |
 | Simulate | Dry-run a request through a draft or the live pipeline on a real gateway |
 | Guardrails | Registered versions, register a `guardrail.yaml`, deprecate |
 | Tenants & keys | Gateway API keys, agent trust, action risk, score modifiers |
+| Discovery connectors | The sources the inventory is built from: add (platform admins), run now, runs |
 | Gateways | Heartbeats: installed guardrails, snapshot and catalog versions, last error |
 | Analytics | Decisions over time, block rate, latency against the 500 ms budget |
 | Activity log | The append-only change log |

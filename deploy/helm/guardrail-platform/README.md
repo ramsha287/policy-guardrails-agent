@@ -30,6 +30,11 @@ helm upgrade --install guardrails deploy/helm/guardrail-platform -n guardrails -
 | `gateway.proxy.*` | off | OpenAI-compatible `/v1/chat/completions` with the guardrails applied |
 | `gateway.configSource` | `control_plane` | Or `file` with `gateway.snapshot` |
 | `controlPlane.enabled` | `true` | `false` for gateway-only releases (other environments) |
+| `controlPlane.discovery.scheduler` | `true` | Run due discovery connectors ([agent discovery](../../../docs/discovery.md)) |
+| `controlPlane.discovery.secretKeys` | `[]` | Secret keys (`DISCOVERY_SECRET_*`) connectors may name as credentials |
+| `controlPlane.discovery.kubernetes.enabled` | `false` | Read-only ClusterRole (pods, kagent agents, all namespaces) for the in-cluster Kubernetes connector. Cluster-wide and shared by every tenant's connectors: only platform admins configure connectors, so point one tenant's connector at it or restrict each connector's `namespaces` |
+| `controlPlane.discovery.kubernetes.apiServerCIDRs` | `[]` | Required when the Kubernetes connector is enabled: API server addresses for the egress NetworkPolicy (the chart fails without them) |
+| `controlPlane.discovery.logs.existingClaim` | `""` | PVC with DNS query logs for the `dns_log` connector (mounted read-only) |
 | `controlPlane.twoPersonEnvironments` | `[production]` | Environments that need a second approver |
 | `controlPlane.gatewayUrls` | `{}` | Gateway per environment for simulations |
 | `controlPlane.ingress.*` | enabled | Console + admin API |

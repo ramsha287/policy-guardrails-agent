@@ -11,3 +11,4 @@ jsonschema>=4.21
 cryptography>=42
 redis>=5.0
 prometheus-client>=0.20
+boto3>=1.35

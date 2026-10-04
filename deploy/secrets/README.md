@@ -59,6 +59,7 @@ After changing a secret, restart the workloads that read it:
 | `PROXY_UPSTREAM_API_KEY` | gateway | Proxy mode only |
 | `VERIFY_SQL_DRY_RUN` | gateway | SQL dry-run verification only; read-replica DSNs with a read-only user |
 | `OUTBOX_WEBHOOK_SECRET` | gateway | Event webhook only; receivers verify `X-Guardrail-Signature` with it |
+| `DISCOVERY_SECRET_*` | control plane | Discovery connector credentials (OpenAI Admin key, MCP tokens, a Kubernetes token for another cluster). List them in `controlPlane.discovery.secretKeys`; connectors can only name variables with this prefix |
 
 ## Don't
 

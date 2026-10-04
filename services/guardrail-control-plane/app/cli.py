@@ -4,6 +4,8 @@
     python -m app.cli import-gateway --snapshot /snapshots/dev.json [--snapshot ...]
     python -m app.cli bootstrap-dev --snapshot /snapshots/dev.json --write /bootstrap/cp.env
     python -m app.cli dev-certs --out /certs --names guardrail-control-plane,guardrail-gateway
+    python -m app.cli discovery-sync [--tenant acme] [--connector ID]   run connectors now (cron/CI)
+    python -m app.cli discovery-reconcile [--tenant acme]                re-evaluate states and findings
 
 `import-gateway` migrates an existing phase 1-3 deployment: it copies tenants, gateway API key
 *hashes* (existing agent keys keep working), agents, actions and modifiers from the gateway's
@@ -139,6 +141,43 @@ async def _import_gateway(ctx: Ctx, snapshots: list[Path], plugin_dirs: list[Pat
     return report
 
 
+async def _discovery(ctx: Ctx, args: argparse.Namespace, settings: Any) -> int:
+    import httpx
+
+    from .main import _sql_fetcher
+    from .services.discovery import DiscoveryService
+
+    audit_engine = make_engine(settings.audit_dsn) if settings.audit_dsn else None
+    async with httpx.AsyncClient(timeout=30.0) as http:
+        svc = DiscoveryService(
+            ctx,
+            http,
+            audit_fetch=_sql_fetcher(make_sessionmaker(audit_engine)) if audit_engine else None,
+            allow_http=settings.discovery_allow_http,
+            max_observations=settings.discovery_max_observations,
+        )
+        try:
+            tenants = [args.tenant] if args.tenant else [t.id for t in await ctx.store.list_tenants()]
+            failed = 0
+            for tenant in tenants:
+                if args.command == "discovery-reconcile":
+                    print(json.dumps({"tenant": tenant, **await svc.reconcile(SYSTEM, tenant)}))
+                    continue
+                for c in await ctx.store.list_connectors(tenant):
+                    if args.connector and c.id != args.connector:
+                        continue
+                    run = await svc.run_connector(c, triggered_by="cli")
+                    if run is None:
+                        print(json.dumps({"connector": c.id, "status": "already running"}))
+                        continue
+                    failed += run.status == "error"
+                    print(json.dumps(run.model_dump(mode="json")))
+            return 1 if failed else 0
+        finally:
+            if audit_engine is not None:
+                await audit_engine.dispose()
+
+
 async def _main(args: argparse.Namespace) -> int:
     settings = get_settings()
     engine = make_engine(settings.postgres_dsn)
@@ -158,6 +197,8 @@ async def _main(args: argparse.Namespace) -> int:
                 print(f"admin key {key.prefix}... written to {args.write}")
             else:
                 print(raw)
+        elif args.command in ("discovery-sync", "discovery-reconcile"):
+            return await _discovery(ctx, args, settings)
         elif args.command == "import-gateway":
             report = await _import_gateway(ctx, [Path(p) for p in args.snapshot], [Path(p) for p in args.plugin_dir])
             print(json.dumps(report, indent=2))
@@ -205,6 +246,11 @@ def main(argv: list[str] | None = None) -> int:
         c.add_argument("--plugin-dir", action="append", default=[], help="gateway plugin dir with guardrail*.yaml")
         if name == "bootstrap-dev":
             c.add_argument("--write", required=True, help="env file for the generated dev admin keys")
+    for name in ("discovery-sync", "discovery-reconcile"):
+        ds = sub.add_parser(name)
+        ds.add_argument("--tenant", default=None, help="default: every tenant")
+        if name == "discovery-sync":
+            ds.add_argument("--connector", default=None, help="one connector id")
     args = p.parse_args(argv)
     if args.command == "dev-certs":  # no database needed
         from guardrail_sdk.devcerts import generate

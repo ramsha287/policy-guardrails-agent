@@ -26,6 +26,10 @@ REVIEWS_OLDEST_PENDING_SECONDS = Gauge("cp_reviews_oldest_pending_seconds", "Age
 REVIEWS_EXPIRED_UNDECIDED = Gauge("cp_reviews_expired_undecided", "Recent reviews that expired without a decision")
 PUBLISH_REQUESTS_PENDING = Gauge("cp_publish_requests_pending", "Publish/rollback requests waiting for approval")
 GATEWAYS = Gauge("cp_gateways", "Gateways by heartbeat state", ["environment", "state"])
+DISCOVERY_RUNS = Counter("cp_discovery_runs_total", "Discovery connector runs", ["kind", "status"])
+INVENTORY_AGENTS = Gauge("cp_inventory_agents", "Discovered agents by reconciliation state", ["state"])
+INVENTORY_FINDINGS_OPEN = Gauge("cp_inventory_findings_open", "Open discovery findings", ["severity"])
+DISCOVERY_CONNECTORS_FAILING = Gauge("cp_discovery_connectors_failing", "Connectors whose last run failed")
 GATEWAYS_BEHIND = Gauge("cp_gateways_behind", "Live gateways not serving the current snapshot", ["environment"])
 
 
@@ -48,6 +52,27 @@ async def refresh_gauges(ctx: Ctx) -> None:
         current = await store.current_snapshot(env)
         behind = [g for g in live if current is not None and g.snapshot_version != current.version]
         GATEWAYS_BEHIND.labels(env).set(len(behind))
+    await refresh_inventory_gauges(ctx)
+
+
+async def refresh_inventory_gauges(ctx: Ctx) -> None:
+    from .domain.inventory import ENTITY_STATES
+
+    store = ctx.store
+    states = {s: 0 for s in ENTITY_STATES if s != "not_agent"}
+    severities = {"high": 0, "medium": 0, "low": 0}
+    for t in await store.list_tenants():
+        for e in await store.list_entities(t.id, agents_only=True, limit=1_000_000):
+            if e.state in states:
+                states[e.state] += 1
+        for f in await store.list_findings(t.id, status="open", limit=1_000_000):
+            severities[f.severity] = severities.get(f.severity, 0) + 1
+    for s, n in states.items():
+        INVENTORY_AGENTS.labels(s).set(n)
+    for s, n in severities.items():
+        INVENTORY_FINDINGS_OPEN.labels(s).set(n)
+    connectors = await store.list_connectors()
+    DISCOVERY_CONNECTORS_FAILING.set(sum(1 for c in connectors if c.enabled and c.last_status == "error"))
 
 
 async def refresh_loop(ctx: Ctx, interval_seconds: float = 30.0) -> None:

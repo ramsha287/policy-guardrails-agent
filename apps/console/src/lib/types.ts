@@ -18,7 +18,9 @@ export type Permission =
   | "publish:approve"
   | "reviews:decide"
   | "reviews:raw"
-  | "admin-keys:write";
+  | "admin-keys:write"
+  | "discovery:write"
+  | "inventory:write";
 
 export interface Me {
   key_id: string;
@@ -30,7 +32,7 @@ export interface Me {
   environments: Environment[];
   two_person_environments: Environment[];
   review_ttl_minutes: number;
-  features: { simulate: boolean; analytics: boolean };
+  features: { simulate: boolean; analytics: boolean; discovery?: boolean };
 }
 
 export interface Tenant {
@@ -316,4 +318,160 @@ export interface SimulationResult {
     results: GuardrailOutcome[];
     payload: Record<string, unknown> | null;
   };
+}
+
+// ---- agent discovery and inventory (/inv/v1) ------------------------------------------------------
+
+export type EntityState = "managed" | "registered_unmanaged" | "shadow" | "stale" | "not_agent";
+export type AgentLikelihood = "confirmed" | "probable" | "none";
+export type FindingStatus = "open" | "accepted" | "resolved";
+export type Severity = "low" | "medium" | "high";
+export type RunStatus = "running" | "ok" | "partial" | "error";
+
+export const AGENT_STATES: Exclude<EntityState, "not_agent">[] = ["managed", "registered_unmanaged", "shadow", "stale"];
+
+export interface ConnectorKind {
+  kind: string;
+  title: string;
+  description: string;
+  full_snapshot: boolean;
+  config_schema: Record<string, unknown>;
+}
+
+export interface Connector {
+  id: string;
+  tenant_id: string;
+  kind: string;
+  name: string;
+  config: Record<string, unknown>;
+  environment: Environment | null;
+  interval_minutes: number;
+  enabled: boolean;
+  created_by: string;
+  created_at: string;
+  updated_at: string;
+  last_run_at: string | null;
+  last_status: RunStatus | null;
+  last_error: string | null;
+  lease_until: string | null;
+}
+
+export interface SyncRun {
+  id: string;
+  connector_id: string;
+  triggered_by: string;
+  started_at: string;
+  finished_at: string | null;
+  status: RunStatus;
+  observations: number;
+  entities_created: number;
+  entities_updated: number;
+  edges_opened: number;
+  edges_closed: number;
+  findings_opened: number;
+  findings_resolved: number;
+  warnings: string[];
+  error: string | null;
+}
+
+export interface SourceEntry {
+  kind: string;
+  connector: string;
+  signals: string[];
+  attrs: Record<string, unknown>;
+  managed: number;
+  direct: number;
+  at?: string;
+  environment?: string | null;
+  owner?: string | null;
+}
+
+export interface InventoryEntity {
+  id: string;
+  tenant_id: string;
+  kind: string;
+  name: string;
+  strong_keys: string[];
+  weak_keys: string[];
+  attrs: { by_source?: Record<string, SourceEntry>; [key: string]: unknown };
+  sources: string[];
+  environment: string | null;
+  first_seen: string;
+  last_seen: string;
+  agent_likelihood: AgentLikelihood;
+  reasons: string[];
+  state: EntityState;
+  registry_agent_id: string | null;
+  owner_guess: string | null;
+  managed_volume: number;
+  direct_volume: number;
+  probable_matches: string[];
+  ignored_until: string | null;
+  ignore_reason: string | null;
+  updated_at: string;
+}
+
+export interface InventoryEdge {
+  id: string;
+  src: string;
+  dst: string;
+  kind: string;
+  attrs: Record<string, unknown>;
+  source: string;
+  confidence: number;
+  valid_from: string;
+  valid_to: string | null;
+  last_seen: string;
+}
+
+export interface EntityRef {
+  id: string;
+  kind: string;
+  name: string;
+  state: EntityState;
+}
+
+export interface Observation {
+  id: string;
+  connector_id: string;
+  run_id: string;
+  kind: string;
+  source_ref: string;
+  observed_at: string;
+  attrs: Record<string, unknown>;
+}
+
+export interface Finding {
+  id: string;
+  tenant_id: string;
+  entity_id: string;
+  kind: string;
+  severity: Severity;
+  summary: string;
+  details: Record<string, unknown>;
+  status: FindingStatus;
+  created_at: string;
+  updated_at: string;
+  resolved_at: string | null;
+  resolved_by: string | null;
+  note: string;
+}
+
+export interface EntityDetail {
+  entity: InventoryEntity;
+  evidence: Observation[];
+  relations: { edge: InventoryEdge; direction: "in" | "out"; other: EntityRef | null }[];
+  findings: Finding[];
+}
+
+export interface Coverage {
+  tenant_id: string;
+  environment: Environment | null;
+  agents: number;
+  active_agents: number;
+  by_state: Record<Exclude<EntityState, "not_agent">, number>;
+  agent_coverage: number | null;
+  volume: { window_days: number; gateway_requests: number; direct_outside_gateway: Record<string, number> };
+  open_findings: number;
+  connectors: { id: string; kind: string; name: string; last_run_at: string | null; last_status: RunStatus | null }[];
 }
