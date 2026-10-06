@@ -1,23 +1,35 @@
-# ai-gateway changes for the guardrail platform
+# The AI Gateway (PII redaction)
 
-These are the changes the `ai-gateway-pii` adapter needs from the existing AI Security
-Gateway (plan section 6). All of them are additive. Existing clients of `/text`, `/file`
+`services/ai-gateway` is the existing AI Security Gateway the platform's `ai-gateway-pii`
+guardrail calls ([docs/guardrails.md](../../docs/guardrails.md#ai-gateway-pii-the-ai-gateway)):
+
+| Service | Port | Does |
+| --- | --- | --- |
+| `project-service` | 8000 | Redaction projects (entities, custom regex, replace/mask/hash) and API keys; PostgreSQL |
+| `instant-redaction-service` | 8001 | Presidio (spaCy `en_core_web_lg`) text, batch, JSON and file redaction |
+
+Tests: `instant-redaction-service/tests` run against real Presidio in CI (the `ai-gateway` job).
+
+## Changes made for the guardrail platform
+
+These are the changes the `ai-gateway-pii` adapter needed from the AI Gateway. All of them are
+additive. Existing clients of `/text`, `/file`
 and the project APIs see no change.
 
 | # | Service | Change | Status |
 | --- | --- | --- | --- |
-| 1 | instant-redaction | `POST /text?include_findings=true` also returns `redacted`, `findings[]` (`entity_type`, `start`, `end`, `score`) and `offsets_basis` | **Done** (this PR) |
-| 2 | instant-redaction | `POST /text/batch` (up to 100 items, findings always included) for retrieval chunks | **Done** (phase 3) |
-| 3 | instant-redaction | `POST /json[?include_findings=true]` redacts every string value; findings carry a JSON path such as `$.rows[0].email` | **Done** (phase 3) |
+| 1 | instant-redaction | `POST /text?include_findings=true` also returns `redacted`, `findings[]` (`entity_type`, `start`, `end`, `score`) and `offsets_basis` | **Done** |
+| 2 | instant-redaction | `POST /text/batch` (up to 100 items, findings always included) for retrieval chunks | **Done** |
+| 3 | instant-redaction | `POST /json[?include_findings=true]` redacts every string value; findings carry a JSON path such as `$.rows[0].email` | **Done** |
 | 4 | both | Accept `X-Request-ID` and `traceparent` and put `trace_id` in logs; optional OpenTelemetry spans when `OTEL_EXPORTER_OTLP_ENDPOINT` is set | **Done** |
-| 5 | instant-redaction | Cache project config (`PROJECT_CACHE_TTL_SECONDS`, default 60). project-service publishes changes on Redis `ai-gateway:project-changed`, which evicts entries immediately | **Done** (phase 3) |
+| 5 | instant-redaction | Cache project config (`PROJECT_CACHE_TTL_SECONDS`, default 60). project-service publishes changes on Redis `ai-gateway:project-changed`, which evicts entries immediately | **Done** |
 | 6 | instant-redaction | Presidio warm-up at start-up (already present) plus `GET /ready`, which returns 503 until the engines are loaded | **Done** |
 | 7 | both | Stop logging request bodies on validation errors (they carry the text being redacted) | **Done** |
-| 8 | project-service | API-key `scope` so the engine's key is `service` and rate-limited separately | **Done** (phase 4) |
-| 9 | project-service | `hash` redaction as HMAC-SHA256 with a per-project secret | **Done** (phase 4) |
+| 8 | project-service | API-key `scope` so the engine's key is `service` and rate-limited separately | **Done** |
+| 9 | project-service | `hash` redaction as HMAC-SHA256 with a per-project secret | **Done** |
 | 10 | both | `GET /version` | **Done** |
 
-## 1. Findings on `/text`
+### 1. Findings on `/text`
 
 ```http
 POST /ai-gateway/redact/api/text?include_findings=true
@@ -45,7 +57,7 @@ X-API-Key: gw_...
 Code: `RedactionService.redact_text_detailed()` and `_analyze_and_redact()` in
 `services/redaction_service.py`. `redact_text()` and every file path keep their old behaviour.
 
-## Phase 3 changes
+### Redaction internals
 
 - **Presidio no longer blocks the event loop.** All analysis (text, batch, JSON, CSV, image and
   PDF) runs in a bounded thread pool (`ANALYZER_WORKERS`, default 4).
@@ -58,9 +70,9 @@ Code: `RedactionService.redact_text_detailed()` and `_analyze_and_redact()` in
 - **Tests:** `instant-redaction-service/tests` runs against real Presidio and en_core_web_lg in CI
   (the `ai-gateway` job), with project-service and API keys faked.
 
-## Phase 4 changes
+### API-key scope and hashing
 
-### 8. API-key scope and rate limits
+#### 8. API-key scope and rate limits
 
 - project-service: `api_keys.scope` is `client` (default) or `service`. Migration
   `0004_api_key_scope.py` adds the column, and every existing key becomes `client`. Create the
@@ -73,7 +85,7 @@ Code: `RedactionService.redact_text_detailed()` and `_analyze_and_redact()` in
   instant-redaction service. The service selects `scope` from `api_keys` and fails without the
   column.
 
-### 9. Keyed `hash` redaction
+#### 9. Keyed `hash` redaction
 
 - `hash` mode is now HMAC-SHA256. Each project uses its own key, derived from `HASH_SECRET` and the
   project id, so the same value hashes differently in two projects. The hash can no longer be
@@ -84,11 +96,10 @@ Code: `RedactionService.redact_text_detailed()` and `_analyze_and_redact()` in
   warning). Set it in every environment, keep it in your secret store, and do not rotate it
   casually: rotating it changes every hash.
 
-## Still open
+### Still open
 
 - **Redaction service reads `api_keys` directly.** It shares that table with project-service,
   and now reads `scope` from it too. This is coupling, not a vulnerability: both services are
   behind NetworkPolicies and use the same database user in the chart. Moving key validation
-  behind a project-service endpoint (with a short cache) is still open. It was left out of
-  phase 5 because it changes the ai-gateway's request path and its own tests.
-- The project-service README still mentions MongoDB and Consul. The code uses PostgreSQL.
+  behind a project-service endpoint (with a short cache) is still open. It changes the
+  AI Gateway's request path and its own tests, so it is left for later.

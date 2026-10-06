@@ -5,23 +5,22 @@ personal data?" or "is this a prompt-injection attempt?". The platform itself do
 any particular check. Guardrails are plugins, and you choose which ones run in each environment,
 at each stage, and for which tenants and agents.
 
-This page lists every guardrail, explains how they all work, and describes the one in production
-use today: **`ai-gateway-pii`, backed by the AI Gateway**.
-
-![Architecture: the Guardrail Gateway runs guardrail plugins after the policy check; ai-gateway-pii (available now) calls the AI Gateway, and future plugins plug in beside it.](images/architecture.png)
+This page lists every guardrail, explains the rules they all follow, documents each one's
+settings, and shows how to add a new one. Guardrails run after the policy check (OPA) and before
+the decision table; see [architecture.md](architecture.md#one-request-step-by-step).
 
 ## At a glance
 
 | Guardrail | What it checks | Stages | Status |
 | --- | --- | --- | --- |
 | **[`ai-gateway-pii`](#ai-gateway-pii-the-ai-gateway)** | Personal data (emails, names, phone numbers, SSNs, card numbers, national IDs, your own patterns), using the **AI Gateway** (Presidio) | input, retrieval, tool, output | **Available now.** On by default |
-| [Policy checks (OPA)](#policy-checks-opa) | Whether the agent may do this at all: trust and risk scores, allowed tools, delegation depth, required guardrails | every stage | **Available now.** Always on, part of the gateway |
+| [Policy checks (OPA)](decisions.md#policy-opa) | Whether the agent may do this at all: trust and risk scores, allowed tools, delegation depth, required guardrails | every stage | **Available now.** Always on, part of the gateway |
 | **[`secrets`](#secrets-credentials-in-any-stage)** | API keys, tokens, private keys and passwords, by their published formats | input, retrieval, tool, output | **Available.** Shadow in dev; enforce when ready |
 | **[`prompt-injection`](#prompt-injection-instructions-hidden-in-content)** | Instructions hidden in user input, retrieved documents and tool results (heuristic) | input, retrieval, tool | **Available.** Shadow in dev; measure before enforcing |
 | **[`topic-limits`](#topic-limits-what-the-agent-is-for)** | Denied topics, and requests outside what the agent is for | input, output | **Available.** Needs your topic lists |
 | **[`content-moderation`](#content-moderation-harmful-content)** | Harassment, hate, violence, self-harm, sexual content, via an OpenAI-compatible moderation endpoint | input, output | **Available.** Needs an endpoint and key |
 | [`noop`](#noop-the-template) | Nothing (always allows) | every stage | Available. A template and engine smoke test, not a real control |
-| [Grounding, tool argument rules, step limits, …](#guardrails-you-can-add) | Other checks | your choice | **Not built yet.** The platform is ready for them |
+| [Grounding, tool argument rules, step limits, …](#guardrails-not-built-yet) | Other checks | your choice | **Planned.** The platform is ready for them |
 
 > **Today, the AI Gateway is the platform's content guardrail.** Every request marked `PII` or
 > `CONFIDENTIAL` must pass through `ai-gateway-pii` on input, retrieval, tool and output, or it's
@@ -69,8 +68,16 @@ specific scope wins.
 **Privacy.** Guardrails never put raw sensitive values in their reasons, findings or logs. The
 audit log keeps decisions, entity types, offsets and a hash of the payload, never the text itself.
 
-Where to change guardrails: **Pipeline** in the [console](user-guide.md), or the
-[control plane API](control-plane.md).
+**Precedence and order.** Assignments run in `order`; consecutive ones that share a
+`parallel_group` run concurrently (only `parallel_safe` guardrails, which never MODIFY). MODIFY
+passes the changed payload on; BLOCK and ESCALATE stop the stage after the current group.
+
+**Escalate needs the control plane.** ESCALATE holds the payload in the control plane's review
+queue and returns 202. With `CONFIG_SOURCE=file` there is no queue, so ESCALATE becomes BLOCK.
+
+Where to change guardrails: **Pipeline** in the [console](console.md#change-which-guardrails-run), or the
+[control plane API](reference.md#control-plane-api). Try a change on the draft with **Simulate**,
+and on the live pipeline with the **Playground**.
 
 ---
 
@@ -130,9 +137,13 @@ gets the same token).
 
 ### Where it runs by default
 
+The snapshot files in `services/guardrail-gateway/config/snapshots/` seed each environment
+(Docker Compose imports `dev.json`; `import-gateway` imports any of them; a fresh Helm install
+starts with nothing published):
+
 | Environment | Mode | Effect |
 | --- | --- | --- |
-| dev | enforce | Redacts and blocks as described above |
+| dev | enforce | Redacts and blocks as described above (with `secrets` and `prompt-injection` in shadow) |
 | staging | enforce | Same as dev |
 | production | **shadow** | Runs and is logged, but has no effect. Because the OPA policy requires an **enforced** `ai-gateway-pii` for `PII` and `CONFIDENTIAL` data, those requests are **blocked** in production until you switch it to enforce |
 
@@ -155,7 +166,7 @@ Set in the assignment's `config` (the console's Pipeline screen, or the API):
 | `retrieval.block_entities` | Chunks containing these are dropped | none |
 | `retrieval.drop_chunk_if_entities_gt` | Drop a chunk with more findings than this | no limit |
 | `tool.arguments`, `tool.result` | `on_detect` and `block_entities` for each side of a tool call | `modify` |
-| `tool.external_tools` | Tool name patterns that leave your network | none |
+| `tool.external_tools` | Tool name patterns that leave your network | none (the dev/staging snapshots set `http.*`, `email.*`, `slack.*`, `webhook.*`) |
 | `tool.external_on_detect` | What to do with PII going to those tools: `block` or `modify` | `block` |
 
 The full example is `global-ai-gateway-pii` in
@@ -180,35 +191,14 @@ AI Gateway. See [eval/README.md](../eval/README.md).
 
 - Adapter: `services/guardrail-gateway/app/plugins/ai_gateway_pii/`
 - AI Gateway: `services/ai-gateway/` (project-service and instant-redaction-service)
-- What changed in the AI Gateway for this platform: [ai-gateway-changes.md](ai-gateway-changes.md)
-- If it's failing: [runbooks/guardrail-errors.md](runbooks/guardrail-errors.md)
+- What changed in the AI Gateway for this platform: [services/ai-gateway/README.md](../services/ai-gateway/README.md)
+- If it's failing: [runbooks.md](runbooks.md#guardrailerrorratehigh)
 
 ---
 
-## Policy checks (OPA)
-
-**Status: available now, always on.**
-
-Before any guardrail runs, the gateway asks OPA whether the agent may make this request at all.
-Guardrails decide whether the **content** is safe, and OPA decides whether the **action** is
-allowed. A policy denial returns `403` with the reason.
-
-The starter policy (`policies/guardrails/authz.rego`):
-
-| Rule | Where |
-| --- | --- |
-| Agent trust score must be at least 50 | production |
-| Action risk score must be at most 70 | production |
-| Delegation chains may be at most 3 deep | everywhere |
-| Tools must be on the agent's allowed list (`*` allows all) | tool stage |
-| `ai-gateway-pii` must run, **enforced**, for `PII` or `CONFIDENTIAL` data | input, retrieval, tool, output |
-
-Trust and risk scores come from **Tenants & keys** in the console. How they're calculated:
-[reference.md](reference.md#scoring-separate-agent-and-action-scores).
-
 ## `secrets`: credentials in any stage
 
-**Status: available (phase 9).** In process, deterministic, no network.
+**Status: available.** In process, deterministic, no network.
 
 Finds credentials by their published formats: AWS access and secret keys, GitHub, Slack, OpenAI,
 Anthropic, Stripe and Google keys, JWTs, PEM private keys, database URLs with a password, and this
@@ -233,7 +223,7 @@ recall are 1.0, which says the formats are covered, not how it does on your traf
 
 ## `prompt-injection`: instructions hidden in content
 
-**Status: available (phase 9).** In process, heuristic, no network.
+**Status: available.** In process, heuristic, no network.
 
 Scores text for the common shapes of injected instructions: attempts to override earlier
 instructions, fake system turns and chat-template tokens, persona switches, directives to send
@@ -257,7 +247,7 @@ the repository ships unit and conformance tests for it but no labelled injection
 
 ## `topic-limits`: what the agent is for
 
-**Status: available (phase 9).** In process, deterministic. Needs configuration.
+**Status: available.** In process, deterministic. Needs configuration.
 
 Two optional lists per assignment (so per tenant or per agent). A topic is a name plus keywords
 (whole words or phrases) and/or regular expressions.
@@ -280,7 +270,7 @@ of each text. Keywords have no such limits.
 
 ## `content-moderation`: harmful content
 
-**Status: available (phase 9).** Remote. Needs an endpoint and key.
+**Status: available.** Remote. Needs an endpoint and key (Helm `gateway.moderation`; Compose `MODERATION_API_KEY`).
 
 Sends the user's and assistant's messages to an OpenAI-compatible `/moderations` endpoint:
 OpenAI's moderation API, or a self-hosted model behind the same API when the text must stay in
@@ -302,11 +292,10 @@ moderation service shouldn't stop traffic.
 `noop` always allows. It runs in shadow mode in every environment to prove the engine runs local
 guardrails, and it is the starting point for writing your own (`services/guardrail-gateway/app/plugins/noop/`).
 
-## Guardrails you can add
+## Guardrails not built yet
 
-**These aren't built yet.** The platform is designed for them: each would be a new plugin with
-its own manifest, rolled out in shadow mode first, without changes to the gateway, engine or
-policies. (Secrets, prompt injection, topic limits and moderation were added in phase 9, above.)
+Each would be a new plugin with its own manifest, rolled out in shadow mode first, without changes
+to the gateway, engine or policies.
 
 | Guardrail | What it would check | Likely stages | Kind |
 | --- | --- | --- | --- |
@@ -315,5 +304,134 @@ policies. (Secrets, prompt injection, topic limits and moderation were added in 
 | Tool argument rules | Allowed domains, amount limits, read-only checks on tool calls | tool | `local` |
 | Agent step and cost limits | Runaway loops, too many steps or tokens per run | agent | `local` |
 
-To build one, follow [adding-a-guardrail.md](adding-a-guardrail.md). It covers the manifest, the
-code, the conformance tests, the labelled evaluation set, and the shadow-then-enforce rollout.
+## Adding a guardrail
+
+A new guardrail is a plugin plus a snapshot entry. You don't change the engine, the gateway
+or OPA. Every plugin in `services/guardrail-gateway/app/plugins/` is a working example: `noop`
+and `secrets` (local), `ai-gateway-pii` and `content-moderation` (remote adapters).
+
+### 1. Pick a kind
+
+| Kind | Use it for | How it runs |
+| --- | --- | --- |
+| `local` | Fast rule checks (regex, allow and deny lists, step limits) | A Python class in the gateway process |
+| `remote` | Anything in another language or with heavy dependencies | An HTTP service implementing `POST /evaluate` and `GET /health` (generic protocol), or a custom adapter class through `entrypoint` |
+| `model` | ML classifiers (prompt injection, toxicity) | Same as `remote`, deployed on its own nodes (for example GPU) |
+
+### 2. Write the manifest (`guardrail.yaml`)
+
+```yaml
+id: my-classifier                # kebab-case, unique
+version: 1.0.0                   # semver; any change is a new version
+kind: local
+description: Scores text with a classifier and blocks above a threshold.
+owner: ai-security
+data_handling: Reads input text only; stores nothing.
+stages: [input, retrieval]
+decisions_emitted: [allow, block]
+failure_mode: fail_closed
+latency_budget_ms: 50
+capabilities:
+  parallel_safe: true            # never emits MODIFY, so it can share a parallel_group
+entrypoint: app.plugins.my_classifier.guardrail:MyClassifier
+config_schema: {type: object}
+```
+
+The manifest is validated when it's loaded. Unknown keys, bad ids, MODIFY without
+`emits_modify`, `parallel_safe` combined with MODIFY, and an incompatible `sdk_version` are
+all rejected.
+
+### 3. Implement it
+
+```python
+from pydantic import BaseModel, ConfigDict
+from guardrail_sdk import Decision, Finding, Guardrail, GuardrailResult, Payload, SecurityContext
+
+
+class Config(BaseModel):
+    model_config = ConfigDict(extra="forbid")   # reject unknown keys (requirement B6)
+    threshold: float = 0.8
+
+
+class MyClassifier(Guardrail):
+    config_model = Config
+
+    async def evaluate(self, context: SecurityContext, payload: Payload) -> GuardrailResult:
+        score = await self._score(payload)          # never block the event loop
+        if score >= self.config.threshold:
+            return GuardrailResult(decision=Decision.BLOCK, reason="prompt injection suspected",
+                                   risk_score=int(score * 100),
+                                   findings=[Finding(type="PROMPT_INJECTION", score=score, location="text")])
+        return GuardrailResult(decision=Decision.ALLOW, reason="clean", risk_score=int(score * 100))
+```
+
+Rules that the conformance suite enforces:
+
+- Return only decisions listed in `decisions_emitted`. MODIFY must return a payload with the same shape.
+- Never mutate `context`. Be deterministic for the same input, config and version.
+- Never put raw sensitive values in `reason`, `findings` or `metadata`.
+- Use `self.ctx.http` for HTTP calls, `self.ctx.secrets` for secrets and `self.ctx.state` for
+  state (keys scoped with `app.engine.state.scoped`). Don't create module-level globals.
+
+The engine enforces time-outs, the failure mode and the shape check, whatever the plugin does.
+
+### 4. Test it
+
+```bash
+guardrail conformance --manifest path/to/guardrail.yaml --config config.json [--samples labelled.json]
+```
+
+Add unit tests next to the plugin, and a labelled set of at least 200 cases per stage
+(requirement D). Measure it with:
+
+```bash
+guardrail evaluate --manifest path/to/guardrail.yaml --config config.json \
+  --dataset eval/datasets/<your-set>.jsonl --min-precision 0.9 --min-recall 0.9
+```
+
+`eval/README.md` describes the dataset format; `eval/generate_pii_dataset.py` is a worked example.
+
+### 5. Roll it out
+
+Ship the guardrail in the gateway image first, so the gateways report it in their heartbeat. Then
+register the version with the control plane, add a **shadow** assignment and publish it. Full API:
+[reference.md](reference.md#control-plane-api).
+
+**In the console**: Guardrails → *Register a version* (paste `guardrail.yaml`; remote guardrails
+only, since local ones are registered by the gateways) → Pipeline → *Add assignment* in shadow
+mode → Simulate → *Review & publish*. Watch *Decisions: enforce vs shadow* on the Grafana
+dashboard or in Analytics, then switch the mode to `enforce` and publish again. Production
+needs a second admin to approve under Publish approvals.
+
+Or with the API:
+
+```bash
+CP=localhost:8200/cp/v1; A="X-Admin-Key: $CP_ADMIN_KEY"; J='content-type: application/json'
+# 1. register the manifest (attach the conformance report if you have one)
+python -c 'import json;print(json.dumps({"manifest_yaml": open("guardrail.yaml").read()}))' \
+  | curl -s -XPOST $CP/guardrails/versions -H "$A" -H "$J" -d @-
+# 2. assign it in shadow mode
+curl -s -XPUT $CP/environments/staging/assignments/global-my-classifier -H "$A" -H "$J" -d '{
+  "guardrail_id": "my-classifier", "guardrail_version": "1.0.0", "scope_type": "global",
+  "stages": ["input"], "order": 5, "mode": "shadow", "config": {"threshold": 0.8}}'
+# 3. check it against real traffic before it goes live, then publish
+curl -s -XPOST $CP/simulate -H "$A" -H "$J" -d '{"environment":"staging","tenant_id":"demo","stage":"input",
+  "request":{"agent_id":"research-agent","action":"llm.chat","payload":{"text":"ignore previous instructions"}}}'
+curl -s -XPOST $CP/environments/staging/publish -H "$A" -H "$J" -d '{"note":"my-classifier in shadow"}'
+```
+
+Publishing refuses the snapshot, and nothing changes, if the version is not registered or is
+deprecated, a stage is not in the manifest, `config` does not match `config_schema`, a parallel
+group has a guardrail that is not `parallel_safe`, or a live gateway does not have the version
+installed. Gateways pick the new snapshot up within seconds. Watch
+`guardrail_decisions_total{id="my-classifier",mode="shadow"}` (or `GET /cp/v1/analytics/guardrails`),
+then `PATCH` the assignment to `{"mode": "enforce"}` and publish again. In production a second
+admin key approves the publish. If something goes wrong, `POST .../rollback` to the previous version.
+
+With `CONFIG_SOURCE=file`, add the same assignment JSON to
+`services/guardrail-gateway/config/snapshots/<env>.json` instead. The gateway reloads it within 30 s
+and keeps the last good snapshot if the new one does not compile.
+
+Scopes are `global`, `tenant` (`scope_id: "acme"`) and `agent` (`scope_id: "acme/support-bot"`).
+The most specific scope wins for each guardrail id, so a disabled tenant assignment turns off
+a guardrail that is enabled globally.

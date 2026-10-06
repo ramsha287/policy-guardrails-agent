@@ -26,6 +26,7 @@ import {
   PageHeader,
   Toolbar,
 } from "../components/ui";
+import { ApiError } from "../lib/api";
 import { dateTime, ms } from "../lib/format";
 import { useResource } from "../lib/hooks";
 import { useQueryParam, useRoute } from "../lib/router";
@@ -63,8 +64,9 @@ export function DecisionsPage() {
     [api, env, tenant, agent, decision, stage, hours],
     15_000,
   );
+  // The gateway writes audit records about once a second, so a just-sent request may need a moment.
   const open = useResource(
-    () => (requestId ? api.decision(requestId) : Promise.resolve(null)),
+    () => (requestId ? withRetry(() => api.decision(requestId)) : Promise.resolve(null)),
     [api, requestId],
   );
 
@@ -194,6 +196,17 @@ export function DecisionsPage() {
       )}
     </>
   );
+}
+
+async function withRetry<T>(load: () => Promise<T>, tries = 6, delayMs = 700): Promise<T> {
+  for (let i = 1; ; i++) {
+    try {
+      return await load();
+    } catch (e) {
+      if (!(e instanceof ApiError) || e.status !== 404 || i >= tries) throw e;
+      await new Promise((r) => setTimeout(r, delayMs));
+    }
+  }
 }
 
 /** One line: the most telling reason codes, else the reason. */

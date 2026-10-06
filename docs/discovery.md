@@ -1,4 +1,4 @@
-# Agent discovery and inventory (phase 7)
+# Agent discovery and inventory
 
 Discovery finds the AI agents that exist in your environments, including the ones nobody
 registered, and compares them with the registry (the agent profiles under Tenants & keys). Each
@@ -18,7 +18,7 @@ this agent reach?" and "what changed since Tuesday?".
 No single source sees everything, so discovery never trusts one. Each entity keeps the sources
 that reported it, the signals each one gave and the raw observations behind them.
 
-Try it on the Docker Compose stack with [testing discovery](testing-discovery.md).
+Try it on the Docker Compose stack with the discovery steps in [testing.md](testing.md#discovery-and-inventory-on-the-live-stack).
 
 ## How it works
 
@@ -65,8 +65,7 @@ connector run ─► observations ─► entities ─► classification ─► r
 | probable agent | an agent framework alone; an MCP client alone; calls a model with no tool use seen yet |
 | not an agent | everything else, people's identities, and LLM servers |
 
-This follows the rule in the [architecture proposal](https://claude.ai/code/artifact/8ff001c0-15f0-4725-a362-10ec3d3bd45c):
-an identity counts as an agent when it calls a model and calls tools or data, runs an agent
+An identity counts as an agent when it calls a model and calls tools or data, runs an agent
 framework, or is an MCP client.
 
 **SDK (sidecar) mode is not a bypass.** With the SDK, the agent asks the gateway to check a step
@@ -105,7 +104,7 @@ and list the keys in `controlPlane.discovery.secretKeys`.
 {"lookback_hours": 24, "environment": null, "max_rows": 20000}
 ```
 
-Needs `AUDIT_DSN` on the control plane (the same read-only DSN analytics uses). One observation
+Needs `AUDIT_DSN` on the control plane (the same DSN analytics uses; give it a read-only user outside dev). One observation
 per agent and environment: request count, blocked count, assurance (A0/A1), and from the action
 descriptors the tools it called, the tables or files it read or wrote and the external hosts it
 sent to. This is what makes an agent *managed*. Run it first.
@@ -210,9 +209,10 @@ call that fails becomes a warning on the run and the rest of the run continues.
 Runs `initialize` and `tools/list` (Streamable HTTP, JSON or event-stream responses) on each
 server and never calls a tool. Each tool's name, description and input schema are hashed. The
 first hash seen is *pinned*. A different hash later opens a high-severity
-`tool_definition_changed` finding with the old and new description: this is how a tool that
-changes after you approved it (a "rug pull", tool poisoning) shows up. **Accept** the finding to
-pin the new definition; if the server goes back to the pinned one, the finding resolves itself.
+`tool_definition_changed` finding with the old and new description (the console shows both in the Findings view): this is how a tool
+that changes after you approved it (a "rug pull", tool poisoning) shows up. **Accept** the finding
+to pin the new definition; if the server goes back to the pinned one, the finding resolves itself.
+Until then, calls to that tool carry `TOOL_DEFINITION_CHANGED` (+25) at the gateway.
 
 ## Using the inventory
 
@@ -307,8 +307,8 @@ Data: schema `inventory` (control-plane migration `0004`): `connectors`, `sync_r
 
 ## Findings feed the gateway's risk
 
-Since 0.10 the control plane publishes two things from the inventory in the catalog the gateways
-already poll, and the gateway turns them into capped risk signals:
+The control plane publishes two things from the inventory in the catalog the gateways already
+poll, and the gateway turns them into capped risk signals:
 
 | Catalog field | From | Gateway signal |
 | --- | --- | --- |
@@ -332,7 +332,7 @@ the fields disappear and reappear without waiting for another change.
 
 - Sources so far: our gateway, Kubernetes, DNS logs, OpenAI, Bedrock/AgentCore, MCP. CloudTrail
   invocation logs, Azure (Foundry, Entra Agent ID), Google Cloud and code/SBOM scanning are next.
-- Findings raise risk on the gateway ([below](#findings-feed-the-gateways-risk)) but nothing acts
+- Findings raise risk on the gateway ([above](#findings-feed-the-gateways-risk)) but nothing acts
   on a shadow workload outside the gateway yet: denying its egress to model providers (the
   response ladder's tier-1 step) comes with the response engine.
 - DNS lookups are a proxy for traffic, not a count of requests; resolvers cache, and traffic

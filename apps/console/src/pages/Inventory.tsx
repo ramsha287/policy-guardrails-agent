@@ -205,6 +205,7 @@ export function InventoryPage() {
           entityId={entityParam}
           onClose={() => setEntity(null)}
           onChanged={() => void Promise.all([entities.reload(), coverage.reload(), findings.reload()])}
+          onMerged={(id) => setEntity(id)}
         />
       )}
     </>
@@ -383,11 +384,14 @@ function EntityDialog({
   entityId,
   onClose,
   onChanged,
+  onMerged,
 }: {
   tenant: string;
   entityId: string;
   onClose: () => void;
   onChanged: () => void;
+  /** Linking or registering can merge this entity into another one (the agent's registry entry). */
+  onMerged: (entityId: string) => void;
 }) {
   const { api, can } = useSession();
   const toast = useToast();
@@ -401,19 +405,20 @@ function EntityDialog({
   const [days, setDays] = useState(30);
 
   const e = detail.data?.entity;
-  const done = async (message: string) => {
+  const done = async (message: string, result?: { id: string }) => {
     toast("good", message);
     setAction(null);
-    await detail.reload();
     onChanged();
+    if (result && result.id !== entityId) onMerged(result.id);
+    else await detail.reload();
   };
   const register = useAction(async () => {
-    await api.registerEntity(tenant, entityId, { agent_id: agentId.trim(), base_trust_score: trust, allowed_tools: [] });
-    await done(`Registered as ${agentId.trim()}. Bind a gateway key to it under Tenants & keys.`);
+    const out = await api.registerEntity(tenant, entityId, { agent_id: agentId.trim(), base_trust_score: trust, allowed_tools: [] });
+    await done(`Registered as ${agentId.trim()}. Bind a gateway key to it under Tenants & keys.`, out);
   });
   const link = useAction(async () => {
-    await api.linkEntity(tenant, entityId, agentId);
-    await done(`Linked to ${agentId}.`);
+    const out = await api.linkEntity(tenant, entityId, agentId);
+    await done(`Linked to ${agentId}.`, out);
   });
   const ignore = useAction(async (d: number) => {
     await api.ignoreEntity(tenant, entityId, reason.trim() || "stop ignoring", d);

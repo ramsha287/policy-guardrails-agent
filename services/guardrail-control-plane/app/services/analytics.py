@@ -184,11 +184,11 @@ class AnalyticsService:
             a["points"] += int(r["points"] or 0)
             a["verify_requests"] += int(r["verify_requests"] or 0)
         for r in agreement:
-            a = per.get(r["advisor"])
-            if a is None:
+            found = per.get(r["advisor"])
+            if found is None:
                 continue
             key = ("flagged" if r["flagged"] else "benign") + "_" + ("stopped" if r["stopped"] else "released")
-            m = a.setdefault(
+            m = found.setdefault(
                 "agreement", {"flagged_stopped": 0, "flagged_released": 0, "benign_stopped": 0, "benign_released": 0}
             )
             m[key] += int(r["n"])

@@ -54,15 +54,17 @@ After changing a secret, restart the workloads that read it:
 | `HASH_SECRET` | redaction service | Rotating it changes every `hash` redaction value |
 | `AI_GATEWAY_PROJECT_ID`, `AI_GATEWAY_API_KEY` | gateway | Run `python -m app.cli ai-gateway-credentials` once |
 | `POSTGRES_PASSWORD` | in-chart Postgres and every service | Only with `postgresql.enabled=true` |
-| `*_POSTGRES_DSN`, `AUDIT_DSN` | each service | External Postgres; give `AUDIT_DSN` a read-only user |
+| `*_POSTGRES_DSN`, `AUDIT_DSN` | each service | External Postgres; give `AUDIT_DSN` a read-only user (with the in-chart Postgres the chart reuses the control plane's DSN) |
 | `REDIS_URL` | gateway, control plane, redaction | External Redis |
 | `PROXY_UPSTREAM_API_KEY` | gateway | Proxy mode only |
 | `VERIFY_SQL_DRY_RUN` | gateway | SQL dry-run verification only; read-replica DSNs with a read-only user |
 | `OUTBOX_WEBHOOK_SECRET` | gateway | Event webhook only; receivers verify `X-Guardrail-Signature` with it |
+| `MODERATION_API_KEY` | gateway | `content-moderation` guardrail only (Helm `gateway.moderation.enabled`) |
+| `ADVISOR_SECRET_*` | gateway | Hosted advisors' credentials; list them in `gateway.advisorSecretKeys` |
 | `DISCOVERY_SECRET_*` | control plane | Discovery connector credentials (OpenAI Admin key, MCP tokens, a Kubernetes token for another cluster). List them in `controlPlane.discovery.secretKeys`; connectors can only name variables with this prefix |
 
 ## Don't
 
-- commit a decrypted file (`.gitignore` blocks `*.dec.yaml` and `**/secrets.yaml`)
+- commit a decrypted file (`.gitignore` blocks `*.dec.yaml` and `deploy/secrets/**/secrets.yaml`)
 - use `secrets.create=true` outside a trial: it stores the values in the Helm release
 - share one age key between production and staging

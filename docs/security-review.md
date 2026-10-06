@@ -1,6 +1,6 @@
 # Security review and pen-test plan
 
-Scope for the phase 5 pen test: what to attack, what is already defended (with the test that
+Scope for a pen test: what to attack, what is already defended (with the test that
 proves it), and the open risks to confirm. Run it against a staging install from the Helm chart
 with production settings (`mtls.mode` linkerd or app, NetworkPolicies on, secrets from SOPS).
 
@@ -11,8 +11,10 @@ agents ──(gateway API key)──► gateway :8100 ──► OPA sidecar (loc
                                    │  ├──► redaction service ──► project-service ──► Postgres
                                    │  └──► remote guardrails (config.base_url / manifest endpoint)
                                    └──(INTERNAL_TOKEN [+ mTLS :8201])──► control plane
-operators ──(admin key, browser)──► control plane :8200 (/console, /cp/v1) ──► Postgres, Redis
+operators ──(admin key, browser)──► control plane :8200 (/console, /cp/v1, /inv/v1) ──► Postgres, Redis
 control plane ──(INTERNAL_TOKEN [+ mTLS :8101])──► gateway /internal/simulate
+control plane ──(an agent's gk_ key, Playground)──► gateway /v1/guard/{stage}, /v1/escalations/{id}
+control plane ──(read-only)──► discovery sources: Kubernetes API, DNS logs, OpenAI Admin, AWS, MCP servers
 ```
 
 Assets: prompts and tool data in flight (PII), held review payloads (encrypted at rest), the
@@ -25,7 +27,9 @@ configuration (who can switch a guardrail off).
 | --- | --- | --- |
 | Gateway auth | SHA-256 key hashes; revocation reaches gateways within seconds; suspended tenants rejected | `test_control_plane_mode.py::test_catalog_holder_auth_rules` |
 | Admin auth / RBAC | roles × tenant scope; platform-only publish/registry; requester can't approve own publish | `guardrail-control-plane/tests/test_services.py`, console smoke test |
-| Tenant isolation | tenant keys see only their reviews, catalog, assignments, diff, analytics | `test_services.py` (reviews, diff), `test_analytics.py` |
+| Tenant isolation | tenant keys see only their reviews, catalog, assignments (also inside published snapshots), diff, analytics, decision log, inventory | `test_services.py` (reviews, diff, snapshot visibility), `test_analytics.py`, `test_discovery.py` |
+| Playground | needs `catalog:write` on the key's tenant and an enabled environment; the agent key is checked against the catalog first and never stored or logged; the change log records who sent what | `test_playground.py`, `test_api.py::test_playground_and_decision_log_over_http` |
+| Discovery connectors | platform-only configuration; credentials only from `DISCOVERY_SECRET_*`; metadata/loopback/link-local refused; no redirects | `test_discovery.py` |
 | Fail-closed | no snapshot → 503; OPA down → deny; review queue down or TTL → BLOCK; proxy refuses streaming and non-text | `test_pipeline.py`, `test_proxy.py::test_fail_closed_on_what_cannot_be_checked` |
 | Raw PII exposure | raw review payload only for `reviewer-raw`, after confirmation, recorded in the audit log; payload text never stored in the audit log | `test_services.py::test_review_flow_and_payload_release`, `test_api.py::test_modify_flow_and_audit_has_no_raw_text` |
 | Audit integrity | UPDATE/DELETE rejected by trigger; outage → disk spool, idempotent replay | `integration/test_postgres.py` |
@@ -44,7 +48,8 @@ configuration (who can switch a guardrail off).
 3. Replay INTERNAL_TOKEN from a non-gateway pod: NetworkPolicy should block it. With `mtls.mode=app`, a missing or rogue client certificate is refused.
 
 **Authorization (IDOR / tenant escape)**
-4. Tenant key A: read or decide tenant B's review by ID, simulate as tenant B, create an assignment scoped to B or `global`, read B's API keys, agents and analytics.
+4. Tenant key A: read or decide tenant B's review by ID, simulate as tenant B, create an assignment scoped to B or `global`, read B's API keys, agents, analytics, decision log entries (`/cp/v1/decisions/{request_id}` of B's request), inventory, and B's assignments through `snapshots/current` or `publish-requests`.
+4a. Playground: send with tenant B's gateway key using a tenant-A editor key; send to an environment not in `PLAYGROUND_ENVIRONMENTS`; use a revoked/expired/other-environment key; path tricks in the escalation id.
 5. Editor key: publish to production without approval; approve its own request through the API; deprecate a guardrail; create an admin key.
 6. Reviewer key without `reviewer-raw`: fetch `?include_raw=true`.
 
@@ -72,7 +77,10 @@ configuration (who can switch a guardrail off).
 | Risk | Current state | Recommendation |
 | --- | --- | --- |
 | Unauthenticated 401 floods | not throttled in the app | Traefik/NGINX rate-limit middleware on the ingress |
-| SSRF via editable `base_url` | contained by egress NetworkPolicies | allow-list `base_url` hosts per guardrail in the manifest (next phase) |
+| SSRF via editable `base_url` | contained by egress NetworkPolicies | allow-list `base_url` hosts per guardrail in the manifest |
+| `/metrics` unauthenticated | scrape access limited by NetworkPolicy (`networkPolicy.prometheusNamespace`) | keep it off the ingress |
+| Review preview stored in clear | only the held payload is encrypted; the 500-character preview is not (it is what a guardrail already redacted, if any) | treat `control.reviews` as sensitive; restrict DB access |
+| Playground = editors can act as agents | off unless `PLAYGROUND_ENVIRONMENTS` lists the environment; audited | leave it off in production |
 | In-process rate limits | per replica (divided by the chart) | move to Redis if exact per-key limits matter |
 | emptyDir audit spool | lost on pod deletion during an outage | PVC-backed spool, or an external queue |
 | INTERNAL_TOKEN is shared | any holder can act as a gateway | per-gateway credentials via mTLS identities (the certificate CN) |

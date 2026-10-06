@@ -74,7 +74,7 @@ jobs:
         run: mypy app
 
   latency:
-    # Gate 1: the decision path adds under 15 ms at p99 (docs/gate-1.md). Measured against a real
+    # Gate 1: the decision path adds under 15 ms at p99 (docs/testing.md#gate-1). Measured against a real
     # OPA server. Report-only: shared runners are noisy; the gate is measured on your own hardware.
     runs-on: ubuntu-latest
     continue-on-error: true
@@ -190,7 +190,7 @@ jobs:
             prom/prometheus:v2.54.1 check rules /rules/guardrail-alerts.yaml
 
   security:
-    # Report-only until the first baseline is triaged (docs/security/pentest-plan.md).
+    # Report-only until the first baseline is triaged (docs/security-review.md).
     runs-on: ubuntu-latest
     continue-on-error: true
     steps:
