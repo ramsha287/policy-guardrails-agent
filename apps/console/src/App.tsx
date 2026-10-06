@@ -13,12 +13,14 @@ import { AdvisorsPage } from "./pages/Advisors";
 import { AnalyticsPage } from "./pages/Analytics";
 import { ApprovalsPage } from "./pages/Approvals";
 import { CatalogPage } from "./pages/Catalog";
+import { DecisionsPage } from "./pages/Decisions";
 import { ConnectorsPage } from "./pages/Connectors";
 import { FleetPage } from "./pages/Fleet";
 import { GuardrailsPage } from "./pages/Guardrails";
 import { InventoryPage } from "./pages/Inventory";
 import { OverviewPage } from "./pages/Overview";
 import { PipelinePage } from "./pages/Pipeline";
+import { PlaygroundPage } from "./pages/Playground";
 import { ReviewsPage } from "./pages/Reviews";
 import { SignIn } from "./pages/SignIn";
 import { SimulatePage } from "./pages/Simulate";
@@ -59,6 +61,13 @@ const NAV: NavItem[] = [
     visible: (s) => s.can("read") && s.me.features.simulate,
     render: () => <SimulatePage />,
   },
+  {
+    path: "/playground",
+    label: "Playground",
+    group: "Configure",
+    visible: (s) => s.can("catalog:write") && (s.me.features.playground?.length ?? 0) > 0,
+    render: () => <PlaygroundPage />,
+  },
   { path: "/guardrails", label: "Guardrails", group: "Configure", visible: can("read"), render: () => <GuardrailsPage /> },
   { path: "/catalog", label: "Tenants & keys", group: "Configure", visible: can("read"), render: () => <CatalogPage /> },
   {
@@ -69,6 +78,13 @@ const NAV: NavItem[] = [
     render: () => <ConnectorsPage />,
   },
   { path: "/fleet", label: "Gateways", group: "Observe", visible: can("read"), render: () => <FleetPage /> },
+  {
+    path: "/decisions",
+    label: "Decision log",
+    group: "Observe",
+    visible: (s) => s.can("read") && s.me.features.decisions === true,
+    render: () => <DecisionsPage />,
+  },
   {
     path: "/analytics",
     label: "Analytics",

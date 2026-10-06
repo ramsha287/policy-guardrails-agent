@@ -1,6 +1,6 @@
 // Labels, tones and helpers for the agent inventory screens (kept free of React for unit tests).
 
-import type { EntityState, InventoryEntity, RunStatus, Severity, SourceEntry } from "./types";
+import type { EntityState, Finding, InventoryEntity, RunStatus, Severity, SourceEntry } from "./types";
 
 type Tone = "neutral" | "info" | "good" | "warning" | "serious" | "critical";
 
@@ -105,4 +105,12 @@ export function parseConfig(text: string): { config?: Record<string, unknown>; e
   } catch (e) {
     return { error: `Not valid JSON: ${e instanceof Error ? e.message : String(e)}` };
   }
+}
+
+/** For a changed MCP tool: the approved description and the one the server serves now. */
+export function definitionChange(f: Finding): { before: string; after: string } | null {
+  if (f.kind !== "tool_definition_changed") return null;
+  const d = f.details ?? {};
+  const str = (v: unknown) => (typeof v === "string" ? v : "");
+  return { before: str(d.old_description), after: str(d.new_description) };
 }

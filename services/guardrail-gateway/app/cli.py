@@ -1,4 +1,7 @@
-"""Admin CLI until the control plane ships (phase 4).
+"""Gateway admin CLI: the dev bootstrap, and the catalog tables for CONFIG_SOURCE=file installs.
+
+With the control plane (CONFIG_SOURCE=control_plane) manage tenants, keys, agents and actions in the
+console or /cp/v1 instead; the control plane imports these tables once (`import-gateway`).
 
 python -m app.cli create-tenant --id acme --name "Acme Corp"
 python -m app.cli create-api-key --tenant acme --name support-bot --agent support-bot
@@ -139,6 +142,10 @@ async def bootstrap_dev(sm: async_sessionmaker[AsyncSession], out: Path, project
         ("database.read", "customer_db", 40),
         ("database.write", "*", 60),
         ("crm.lookup", "*", 30),
+        # external calls and MCP tools, so the demo's exfiltration and tool scenarios score from a
+        # known base instead of the unknown-action maximum (100)
+        ("http.post", "*", 30),
+        ("ticket.create", "*", 20),
     ]:
         await upsert_action(sm, tenant, action, resource, risk)
     for kind, value, delta in [

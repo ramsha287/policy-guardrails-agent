@@ -159,7 +159,9 @@ class GuardrailEngine:
 
         if final == Decision.ESCALATE and self._escalate_as_block:
             final = Decision.BLOCK
-            reason = f"{reason} (escalation required; human review queue not yet available, blocking)"
+            reason = (
+                f"{reason} (escalation required, but this gateway has no review queue (CONFIG_SOURCE=file): blocking)"
+            )
 
         return StageOutcome(
             decision=final,

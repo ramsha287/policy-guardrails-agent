@@ -31,6 +31,13 @@ class Settings(BaseSettings):
     gateway_urls: dict[str, str] = Field(default_factory=dict, alias="GATEWAY_URLS")
     http_timeout_seconds: float = Field(10.0, alias="HTTP_TIMEOUT_SECONDS")
 
+    # Playground (console): send a real, audited agent request through a gateway with an agent's
+    # key. Off unless the environment is listed, e.g. ["dev"]. PLAYGROUND_GATEWAY_URLS maps an
+    # environment to the gateway's *public* URL (the agent API); it falls back to GATEWAY_URLS /
+    # GATEWAY_URL, which is right when those are the public port (no mtls.mode=app).
+    playground_environments: list[str] = Field(default_factory=list, alias="PLAYGROUND_ENVIRONMENTS")
+    playground_gateway_urls: dict[str, str] = Field(default_factory=dict, alias="PLAYGROUND_GATEWAY_URLS")
+
     # Optional read-only DSN for analytics over the gateway's audit schema
     audit_dsn: str | None = Field(None, alias="AUDIT_DSN")
 

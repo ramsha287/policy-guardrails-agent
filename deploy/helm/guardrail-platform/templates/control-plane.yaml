@@ -12,6 +12,14 @@
 {{- range $env, $url := $cp.gatewayUrls -}}
 {{- $_ := set $gatewayUrls $env $url -}}
 {{- end }}
+{{- $pg := $cp.playground | default dict -}}
+{{- $pgUrls := dict -}}
+{{- if .Values.gateway.enabled -}}
+{{- $_ := set $pgUrls .Values.global.environment (printf "http://%s:%v" (include "gp.name" (dict "root" $ "component" "gateway")) .Values.gateway.port) -}}
+{{- end -}}
+{{- range $env, $url := ($pg.gatewayUrls | default dict) -}}
+{{- $_ := set $pgUrls $env $url -}}
+{{- end }}
 apiVersion: v1
 kind: ServiceAccount
 metadata:
@@ -135,6 +143,10 @@ spec:
             - {name: GATEWAY_URL, value: {{ index $gatewayUrls .Values.global.environment | quote }}}
             {{- end }}
             - {name: GATEWAY_URLS, value: {{ $gatewayUrls | toJson | quote }}}
+            {{- if $pg.environments }}
+            - {name: PLAYGROUND_ENVIRONMENTS, value: {{ $pg.environments | toJson | quote }}}
+            - {name: PLAYGROUND_GATEWAY_URLS, value: {{ $pgUrls | toJson | quote }}}
+            {{- end }}
             {{- include "gp.mtlsEnv" (dict "root" $ "internalPort" $cp.internalPort) | nindent 12 }}
             - {name: DISCOVERY_SCHEDULER, value: {{ ternary "true" "false" (ne (toString $disc.scheduler) "false") | quote }}}
             - {name: DISCOVERY_TICK_SECONDS, value: {{ $disc.tickSeconds | default 60 | quote }}}

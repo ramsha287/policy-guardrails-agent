@@ -1,4 +1,4 @@
-"""HTTP layer: auth, error mapping, two-person publish, ETag fetch, reviews, simulate."""
+"""HTTP layer: auth, error mapping, two-person publish, ETag fetch, reviews, simulate, playground."""
 
 import httpx
 import pytest
@@ -19,7 +19,7 @@ BASE = "/cp/v1"
 
 
 class Env:
-    def __init__(self, gateway_handler=None):
+    def __init__(self, gateway_handler=None, playground=()):
         self.store = MemoryStore()
         ctx = Ctx(
             store=self.store,
@@ -28,7 +28,13 @@ class Env:
             policy=Policy(),
         )
         gw_http = httpx.AsyncClient(transport=httpx.MockTransport(gateway_handler or (lambda r: httpx.Response(500))))
-        self.container = Container(ctx=ctx, internal_token=TOKEN, http=gw_http, gateway_url="http://gw:8100")
+        self.container = Container(
+            ctx=ctx,
+            internal_token=TOKEN,
+            http=gw_http,
+            gateway_url="http://gw:8100",
+            playground_environments=frozenset(playground),
+        )
         settings = Settings(postgres_dsn="postgresql+asyncpg://unused/db", internal_token=TOKEN)
         self.app = create_app(settings, self.container)
         self.client = httpx.AsyncClient(transport=httpx.ASGITransport(app=self.app), base_url="http://cp")
@@ -369,3 +375,41 @@ async def test_inventory_api_end_to_end():
     me = (await c.get(f"{BASE}/me", headers={"X-Admin-Key": acme_admin})).json()
     assert "inventory:write" in me["permissions"] and "discovery:write" not in me["permissions"]
     assert me["features"]["discovery"] is True
+
+
+async def test_playground_and_decision_log_over_http():
+    seen = []
+
+    def gateway(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(403, json={"request_id": "r-1", "decision": "block", "outcome": "deny"})
+
+    env = Env(gateway, playground=("dev",))
+    alice, _, viewer = await env.keys()
+    c = env.client
+    await c.post(f"{BASE}/tenants", json={"id": "acme", "name": "Acme"}, headers=alice)
+    raw = (await c.post(f"{BASE}/tenants/acme/api-keys", json={"name": "bot"}, headers=alice)).json()["key"]
+    me = (await c.get(f"{BASE}/me", headers=alice)).json()
+    assert me["features"]["playground"] == ["dev"] and me["features"]["decisions"] is False
+    body = {
+        "environment": "dev",
+        "stage": "tool",
+        "gateway_key": raw,
+        "request": {
+            "agent_id": "untrusted-agent",
+            "action": "http.post",
+            "payload": {"tool_call": {"name": "http.post"}},
+        },
+    }
+    r = await c.post(f"{BASE}/playground", json=body, headers=alice)
+    assert r.status_code == 200, r.text
+    assert r.json()["status"] == 403 and r.json()["response"]["outcome"] == "deny"  # the gateway's answer, verbatim
+    assert seen[0].url.path == "/v1/guard/tool" and seen[0].headers["X-API-Key"] == raw
+    assert (await c.post(f"{BASE}/playground", json=body, headers=viewer)).status_code == 403
+    assert (
+        await c.post(f"{BASE}/playground", json={**body, "environment": "production"}, headers=alice)
+    ).status_code == 403
+    assert (
+        await c.post(f"{BASE}/playground", json={**body, "gateway_key": "gk_nope_0000"}, headers=alice)
+    ).status_code == 422
+    assert (await c.get(f"{BASE}/decisions", headers=alice)).status_code == 503  # needs AUDIT_DSN

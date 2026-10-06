@@ -15,6 +15,26 @@ hook returns the value that is safe to use, or raises `GuardrailBlocked`.
 pip install -e packages/guardrail-sdk      # PyPI package later
 ```
 
+## What the agent gets back
+
+`POST /v1/guard/{input|retrieval|tool|output}` with `X-API-Key: gk_…`. The tenant comes from the
+key, the environment from the gateway.
+
+| Status | Meaning | What the agent should do |
+| --- | --- | --- |
+| 200 | `decision` is `allow`, `modify` (use the returned `payload`) or `block` (a guardrail blocked) | Carry on with the returned payload, or stop. The SDK raises `GuardrailBlocked` on block |
+| 202 | `decision` is `escalate`: held for a person (`outcome: "hold"`, poll `GET /v1/escalations/{escalation_id}`), or waiting for the user (`outcome: "verify"`, see `verification`) | Wait (or give up); see below |
+| 403 | `decision` is `block`: OPA denied (`policy.reason`), the key is bound to another agent (`KEY_AGENT_MISMATCH`), unbound keys are refused (`UNBOUND_KEY`), or (enforce mode) the decision table denied or quarantined the session | Stop |
+| 401 / 413 / 422 | Bad key / body over 1 MB / invalid body | Fix the call |
+| 429 | Over the key's rate limit (`Retry-After`) | Back off; the SDK raises `GuardrailGatewayError(429)` and the step doesn't run |
+| 503 | No guardrail configuration loaded (fail-closed) | Treat as blocked |
+
+Every response also carries `outcome`, `reason_codes`, `risk` (score, band, trust, signals,
+`would_outcome`), `obligations`, `assurance` (`A0`/`A1`) and `verification`
+([decisions.md](decisions.md#response-fields)). Log the codes; don't show them to end users verbatim.
+If anything inside the platform fails (a guardrail times out, OPA is down, the review queue is
+unreachable), the answer is **block**.
+
 ## Plain Python (async)
 
 ```python
@@ -73,7 +93,7 @@ The confirmation counts for that exact request once (same body, user and session
 belong to the request's `user_id`, come from a recent sign-in and carry `nonce=v.id`, so the agent
 can't confirm its own request even if it can see the user's normal access token. `client.verification_status(id)` polls if confirmation happens elsewhere. Without
 `verification_channels` the step goes to the review queue as before. Setup on the gateway:
-`VERIFY_OIDC_*` ([settings](contextual-decisions.md#settings)).
+`VERIFY_OIDC_*` ([configuration](reference.md#gateway-configuration), [how it works](decisions.md#verification)).
 
 ## Tools (any framework)
 
@@ -93,8 +113,8 @@ async def crm_lookup(email: str) -> dict:
 
 The tool only ever receives the checked arguments, and the model only sees the checked result.
 A tool that isn't on the agent's `allowed_tools` list is denied by OPA before it runs.
-Any tool matching `external_tools` (default `http.*`, `email.*`, `slack.*`, `webhook.*`) is blocked
-if its arguments contain PII.
+With the dev and staging snapshots, a tool matching `ai-gateway-pii`'s `external_tools`
+(`http.*`, `email.*`, `slack.*`, `webhook.*`) is blocked if its arguments contain PII.
 
 ## LangGraph
 
@@ -172,7 +192,7 @@ results still need the hooks, because the proxy never sees them.
 
 - **One key per agent.** Create the key with the agent selected (console) or `agent_id` (API).
   The gateway then refuses any request from that key with a different `agent_id` (403,
-  `KEY_AGENT_MISMATCH`), and production can refuse unbound keys altogether.
+  `KEY_AGENT_MISMATCH`), and production can refuse unbound keys altogether (`REQUIRE_BOUND_KEYS`).
 - **Send a `session_id`** that stays the same for one run of the agent. Session state (what was
   read, earlier denials, taint from retrieved or external content) only works with it, and
   requests without it carry a small `NO_SESSION` risk.

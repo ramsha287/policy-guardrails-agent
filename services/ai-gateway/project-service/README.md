@@ -1,8 +1,8 @@
-# Project Management Service 📁
+# Project Management Service
 
 The Project Management Service is a microservice in the PII Redaction Platform that enables users to create and manage redaction projects. These projects define how personal data is identified and redacted across various services.
 
-## Features 🚀
+## Features
 
 - **Project Management**
   - Create new redaction projects
@@ -16,18 +16,20 @@ The Project Management Service is a microservice in the PII Redaction Platform t
   - Specify redaction type (replace, mask, hash)
   - Retrieve list of supported predefined entities
 
-## Tech Stack 🛠️
+## Tech stack
 
 - **Language:** Python
 - **Framework:** FastAPI
 - **Validation:** Pydantic
-- **Database:** MongoDB
-- **Service Discovery:** Consul
+- **Database:** PostgreSQL (SQLAlchemy, Alembic migrations)
+- **Events:** Redis (`ai-gateway:project-changed`, evicts the redaction service's project cache)
 - **Containerization:** Docker
 
-## Usage ✅
+## Used by
 
 This service is consumed by:
 
-- **Instant Redaction Service** – for immediate redaction of user input
-- **Batch Redaction Worker** – for processing large files
+- **Instant Redaction Service**, which redacts text, JSON and files with the project's settings
+- The guardrail platform's dev bootstrap and `ai-gateway-credentials`, which create a project and a `service` API key
+
+See [../README.md](../README.md).

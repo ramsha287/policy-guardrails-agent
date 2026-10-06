@@ -101,6 +101,8 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
         discovery_http=discovery_http,
         discovery_allow_http=settings.discovery_allow_http,
         discovery_max_observations=settings.discovery_max_observations,
+        playground_environments=frozenset(settings.playground_environments),
+        playground_gateway_urls=settings.playground_gateway_urls,
     )
     logger.info("control plane ready (two-person: %s)", ",".join(settings.two_person_environments) or "none")
     tasks = [asyncio.create_task(refresh_loop(app.state.container.ctx), name="metrics")]

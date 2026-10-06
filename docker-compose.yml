@@ -137,6 +137,9 @@ services:
       # Agent discovery (docs/discovery.md). Dev only: the demo MCP server speaks plain http.
       DISCOVERY_ALLOW_HTTP: "true"
       DISCOVERY_LOG_DIR: /var/lib/guardrail-discovery/logs
+      # Console -> Playground: send real, audited agent requests to the dev gateway (docs/console.md).
+      PLAYGROUND_ENVIRONMENTS: '["dev"]'
+
     volumes:
       - bootstrap:/bootstrap
       # DNS query logs for the dns_log connector (python examples/discovery/make_dns_log.py)
@@ -171,12 +174,12 @@ services:
       BOOTSTRAP_ENV_FILE: /bootstrap/dev.env
       AI_GATEWAY_URL: http://instant-redaction-service:8001
       REDIS_URL: redis://redis:6379/0
-      # Contextual decisions (docs/contextual-decisions.md, docs/testing-contextual-decisions.md).
+      # Contextual decisions (docs/decisions.md, docs/testing.md).
       # Override from the shell, e.g. `RISK_MODE=enforce docker compose up -d guardrail-gateway`.
       RISK_MODE: ${RISK_MODE:-shadow}
       # Advisors (app/advise): the local classifier runs in shadow by default, so decisions are
       # unchanged and its answers are recorded with each decision (Console -> Advisors). Set to ""
-      # to turn it off, or add an `http`/`bedrock` advisor; see docs/advisors.md.
+      # to turn it off, or add an `http`/`bedrock` advisor; see docs/decisions.md#advisors.
       ADVISORS_JSON: ${ADVISORS_JSON:-[{"name":"local","provider":"local","mode":"shadow"}]}
       # content-moderation guardrail (assign it in the console to use it): an OpenAI-compatible
       # /moderations endpoint and its key. Empty base URL = https://api.openai.com/v1.

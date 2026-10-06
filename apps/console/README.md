@@ -4,21 +4,26 @@ The operator console for the control plane, including the **human review UI** fo
 decisions. React + TypeScript, built with Vite into static files that the control plane serves
 at `/console` (and `/review` redirects to the review queue). There is no separate server.
 
-| Screen | For |
-| --- | --- |
-| Overview | What needs attention: held requests, publishes to approve, unhealthy gateways, last 24 h |
-| Review queue | Approve or reject escalated requests before they expire (reviewer roles) |
-| Agent inventory | Discovered agents by state (managed, shadow, unmanaged, stale), coverage, findings; register, link or ignore |
-| Publish approvals | Second-person approval of production publishes and rollbacks |
-| Pipeline | Assignments per environment, shadow/enforce toggles, diff, publish, rollback |
-| Simulate | Dry-run a request through a draft or the live pipeline on a real gateway |
-| Guardrails | Registered versions, register a `guardrail.yaml`, deprecate |
-| Tenants & keys | Gateway API keys, agent trust, action risk, score modifiers |
-| Discovery connectors | The sources the inventory is built from: add (platform admins), run now, runs |
-| Gateways | Heartbeats: installed guardrails, snapshot and catalog versions, last error |
-| Analytics | Decisions over time, block rate, latency against the 500 ms budget |
-| Activity log | The append-only change log |
-| Admin keys | Keys and roles for the console and the API |
+| Group | Screen | For |
+| --- | --- | --- |
+| Operate | Overview | What needs attention: held requests, publishes to approve, unhealthy gateways, last 24 h |
+| | Review queue | Approve or reject held requests before they expire (reviewer roles) |
+| | Publish approvals | Second-person approval of production publishes and rollbacks |
+| | Agent inventory | Discovered agents by state, coverage, findings (with MCP tool changes); register, link, ignore, accept |
+| Configure | Pipeline | Assignments per environment, shadow/enforce toggles, diff, publish, rollback |
+| | Simulate | Dry-run a request through a draft or the live pipeline on a real gateway (not enforced, not audited) |
+| | Playground | Send a real, audited agent request through the gateway with an agent's key; scenarios for each security flow |
+| | Guardrails | Registered versions, register a `guardrail.yaml`, deprecate |
+| | Tenants & keys | Gateway API keys, agent trust, action risk, score modifiers |
+| | Discovery connectors | The inventory's sources: add (platform admins), run now, runs |
+| Observe | Gateways | Heartbeats: installed guardrails, snapshot and catalog versions, last error |
+| | Decision log | The gateway's audit records: outcome, reason codes, risk signals, guardrail results, advisor answers, hash chain |
+| | Analytics | Decisions over time, block rate, latency |
+| | Advisors | The advisor pilot and the tenants' hosted-advisor data policy |
+| | Activity log | The control plane's append-only change log |
+| | Admin keys | Keys and roles for the console and the API |
+
+How to use each screen: [docs/console.md](../../docs/console.md).
 
 ## Sign-in and security
 
@@ -30,7 +35,8 @@ at `/console` (and `/review` redirects to the review queue). There is no separat
 - The control plane serves the console with a strict CSP (`script-src 'self'`, `connect-src 'self'`,
   `frame-ancestors 'none'`) and no third-party requests: fonts, icons and charts are local.
 - Opening a review, and especially its raw payload (`reviewer-raw` only, after a confirmation), is
-  written to the audit log by the control plane.
+  written to the control plane's change log (Activity log).
+- The Playground's agent key is kept in the page's memory only and sent to `/cp/v1/playground`.
 
 ## Develop
 
@@ -48,14 +54,15 @@ CONTROL_PLANE_URL=http://localhost:8200 npm run dev
 ```bash
 npm run typecheck && npm test          # types + unit tests (vitest)
 npm run build && npm run e2e           # Playwright: every screen in light and dark mode, the review
-                                       # decision, two-person publish, key creation, a tenant
+                                       # decision, two-person publish, inventory and connectors, key
+                                       # creation, Playground -> held request -> audit record, a tenant
                                        # reviewer's view, phone width (390 px) without sideways scroll
 CONSOLE_URL=http://localhost:8200 CONSOLE_ADMIN_KEY=cpk_... npm run e2e   # read-only, live stack
 ```
 
 CI runs all of these (`console` job) and the live smoke test against the Docker Compose stack
-(`e2e` job). After the first `npm install`, commit `package-lock.json` so CI and the image build
-use `npm ci`.
+(`e2e` job). There is no committed `package-lock.json` yet, so CI and the image build use
+`npm install`; committing one would make builds reproducible with `npm ci`.
 
 ## Design notes
 

@@ -1,10 +1,10 @@
-"""Review queue, gateway fleet, change log, admin keys, analytics, simulate."""
+"""Review queue, gateway fleet, change log, admin keys, analytics, decision log, simulate, playground."""
 
 from __future__ import annotations
 
 from typing import Any, Literal
 
-from fastapi import APIRouter, Depends, Query, Response
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from pydantic import BaseModel, Field
 
 from guardrail_sdk.api import GuardRequest
@@ -36,6 +36,19 @@ class SimulateIn(BaseModel):
     request: GuardRequest
 
 
+class PlaygroundIn(BaseModel):
+    environment: Environment
+    stage: Stage
+    # An agent's gateway key. Relayed to the gateway for this one request; never stored or logged.
+    gateway_key: str = Field(min_length=8, max_length=200)
+    request: GuardRequest
+
+
+class PlaygroundEscalationIn(BaseModel):
+    environment: Environment
+    gateway_key: str = Field(min_length=8, max_length=200)
+
+
 def _review_out(r: Any, status: str) -> dict[str, Any]:
     return {**r.model_dump(mode="json", exclude={"payload_enc"}), "status": status}
 
@@ -60,6 +73,8 @@ async def me(p: Principal = Depends(principal), c: Container = Depends(container
             "simulate": bool(c.gateway_url or c.gateway_urls),
             "analytics": c.analytics_fetch is not None,
             "discovery": True,
+            "decisions": c.analytics_fetch is not None,
+            "playground": c.playground.enabled_environments(),
         },
     }
 
@@ -156,6 +171,75 @@ async def simulate(body: SimulateIn, p: Principal = Depends(principal), c: Conta
         stage=body.stage,
         request=body.request,
     )
+
+
+# ---- playground (a real, audited agent request through a gateway) ---------------------------------
+
+
+@router.post("/playground")
+async def playground(body: PlaygroundIn, p: Principal = Depends(principal), c: Container = Depends(container)):
+    """Send one request through the gateway's enforcement path with an agent's key. Unlike
+    /simulate this is real traffic: it is scored with session state, may be held for review, and
+    is audited. Only for environments in PLAYGROUND_ENVIRONMENTS."""
+    return await c.playground.send(
+        p, environment=body.environment, stage=body.stage, gateway_key=body.gateway_key, request=body.request
+    )
+
+
+@router.post("/playground/escalations/{escalation_id}")
+async def playground_escalation(
+    escalation_id: str,
+    body: PlaygroundEscalationIn,
+    p: Principal = Depends(principal),
+    c: Container = Depends(container),
+):
+    """Poll a held request the way the agent does (GET /v1/escalations/{id} on the gateway)."""
+    return await c.playground.escalation(
+        p, environment=body.environment, gateway_key=body.gateway_key, escalation_id=escalation_id
+    )
+
+
+# ---- decision log (the gateway's audit records) ---------------------------------------------------
+
+
+@router.get("/decisions")
+async def decisions(
+    environment: Environment | None = None,
+    tenant_id: str | None = None,
+    hours: int = Query(24, ge=1, le=24 * 90),
+    limit: int = Query(50, ge=1, le=200),
+    agent_id: str | None = Query(None, max_length=128),
+    stage: Stage | None = None,
+    decision: str | None = Query(None, pattern="^(allow|modify|block|escalate)$"),
+    outcome: str | None = Query(None, max_length=24),
+    session_id: str | None = Query(None, max_length=128),
+    p: Principal = Depends(principal),
+    c: Container = Depends(container),
+):
+    """Recent decisions, newest first: reason codes, risk signals, guardrail results, advisor
+    answers and the hash-chain fields of each audit record. Payload text is never stored."""
+    return await c.analytics.decisions(
+        p,
+        environment=environment,
+        tenant_id=tenant_id,
+        hours=hours,
+        limit=limit,
+        agent_id=agent_id,
+        stage=stage.value if stage else None,
+        decision=decision,
+        outcome=outcome,
+        session_id=session_id,
+    )
+
+
+@router.get("/decisions/{request_id}")
+async def decision(
+    request_id: str, tenant_id: str | None = None, p: Principal = Depends(principal), c: Container = Depends(container)
+):
+    row = await c.analytics.decision(p, request_id, tenant_id=tenant_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail=f"no audit record for request {request_id}")
+    return row
 
 
 # ---- analytics (reads the gateway's audit schema through a read-only DSN) ---------------------------

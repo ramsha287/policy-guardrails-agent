@@ -93,3 +93,56 @@ async def test_tenant_keys_are_scoped_to_their_tenant():
 async def test_unconfigured():
     with pytest.raises(AnalyticsUnavailable):
         await AnalyticsService(None).guardrails(ALICE)
+
+
+class DecisionDb:
+    def __init__(self):
+        self.calls = []
+
+    async def fetch(self, sql, params):
+        self.calls.append((sql, params))
+        return [
+            {
+                "created_at": datetime(2026, 10, 7, 9, tzinfo=UTC),
+                "tenant_id": "acme",
+                "request_id": "req-1",
+                "stage": "tool",
+                "decision": "escalate",
+                "outcome": "hold",
+                "reason_codes": ["RISK_HIGH", "TOOL_DEFINITION_CHANGED"],
+                "guardrail_results": '[{"guardrail_id": "secrets", "decision": "allow", "mode": "shadow"}]',
+                "descriptor": None,
+                "risk": '{"score": 74, "band": "high", "signals": [{"code": "TOOL_DEFINITION_CHANGED", "points": 25}]}',
+                "latency_ms": 12.3456,
+                "record_hash": "ab" * 32,
+            }
+        ]
+
+
+async def test_decision_log_filters_and_decodes_the_audit_rows():
+    db = DecisionDb()
+    svc = AnalyticsService(db.fetch)
+    out = await svc.decisions(ALICE, environment="dev", hours=6, limit=500, agent_id="support-bot", outcome="hold")
+    sql, params = db.calls[0]
+    assert "e.agent_id = :agent_id" in sql and "e.outcome = :outcome" in sql and "e.stage" not in sql.split("WHERE")[1]
+    assert params["agent_id"] == "support-bot" and params["environment"] == "dev" and params["limit"] == 200
+    row = out["decisions"][0]
+    assert row["created_at"] == "2026-10-07T09:00:00+00:00" and row["latency_ms"] == 12.35
+    assert row["risk"]["signals"][0]["code"] == "TOOL_DEFINITION_CHANGED"  # JSON columns decoded
+    assert row["guardrail_results"][0]["mode"] == "shadow" and row["descriptor"] is None
+    with pytest.raises(ValueError):
+        await svc.decisions(ALICE, payload="x")
+
+
+async def test_decision_log_is_tenant_scoped_and_needs_the_audit_dsn():
+    db = DecisionDb()
+    svc = AnalyticsService(db.fetch)
+    await svc.decisions(ACME_REVIEWER)
+    assert db.calls[-1][1]["tenant_id"] == "acme"  # a tenant key always sees only its tenant
+    with pytest.raises(Forbidden):
+        await svc.decisions(ACME_REVIEWER, tenant_id="globex")
+    one = await svc.decision(ACME_REVIEWER, "req-1")
+    assert one is not None and one["request_id"] == "req-1"
+    assert db.calls[-1][1]["request_id"] == "req-1" and db.calls[-1][1]["limit"] == 1
+    with pytest.raises(AnalyticsUnavailable):
+        await AnalyticsService(None).decisions(ALICE)

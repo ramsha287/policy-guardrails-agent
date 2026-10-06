@@ -6,6 +6,10 @@ Views over the same window:
 - `guardrails`: per guardrail version, stage, decision and mode: count, latency and errors.
 - `timeseries`: requests per decision per hour (per day for windows over 72 hours).
 
+- `decisions` (separate endpoints): the decision log, one audit record per request with its
+  reason codes, risk signals, guardrail results, advisor answers and hash-chain fields. The
+  gateway never stores payload text, so neither does this.
+
 - `advisors` (separate endpoint): the advisor pilot - answers per advisor, question, status and
   label, latency, points, and how often an advisor flagged a request the deterministic path
   released (the cases a shadow advisor would add; review those before turning it to enforce).
@@ -15,6 +19,7 @@ Filters are optional. A tenant key only ever sees its own tenant.
 
 from __future__ import annotations
 
+import json
 from collections.abc import Awaitable, Callable
 from datetime import timedelta
 from typing import Any
@@ -91,6 +96,24 @@ SELECT advisor, mode, flagged, stopped, count(*) AS n FROM (
 """
 
 
+# The decision log. Every column the gateway audits; payloads are never stored (only their hash).
+DECISIONS_SQL = """
+SELECT e.created_at, e.tenant_id, e.environment, e.request_id, e.trace_id, e.stage, e.agent_id,
+       e.user_id, e.session_id, e.action, e.resource, e.decision, e.outcome, e.reason, e.reason_codes,
+       e.risk_score, e.trust_score, e.policy_allow, e.policy_reason, e.guardrail_results,
+       e.descriptor, e.risk, e.assurance, e.snapshot_version, e.latency_ms, e.payload_sha256,
+       e.chain_id, e.chain_seq, e.prev_hash, e.record_hash
+  FROM audit.audit_events e
+ WHERE {where}
+ ORDER BY e.created_at DESC
+ LIMIT :limit
+"""
+
+DECISION_FILTERS = ("agent_id", "stage", "decision", "outcome", "request_id", "session_id")
+JSON_COLUMNS = ("guardrail_results", "descriptor", "risk")
+MAX_DECISIONS = 200
+
+
 def build_filter(environment: str | None, tenant_id: str | None) -> str:
     """WHERE clause with only the filters that are set (keeps parameter types unambiguous)."""
     clauses = ["e.created_at > :since"]
@@ -161,11 +184,11 @@ class AnalyticsService:
             a["points"] += int(r["points"] or 0)
             a["verify_requests"] += int(r["verify_requests"] or 0)
         for r in agreement:
-            a = per.get(r["advisor"])
-            if a is None:
+            found = per.get(r["advisor"])
+            if found is None:
                 continue
             key = ("flagged" if r["flagged"] else "benign") + "_" + ("stopped" if r["stopped"] else "released")
-            m = a.setdefault(
+            m = found.setdefault(
                 "agreement", {"flagged_stopped": 0, "flagged_released": 0, "benign_stopped": 0, "benign_released": 0}
             )
             m[key] += int(r["n"])
@@ -262,6 +285,56 @@ class AnalyticsService:
                 {"bucket": _iso(r["bucket"]), "decision": r["decision"], "requests": int(r["requests"])} for r in series
             ],
         }
+
+    async def decisions(
+        self,
+        p: Principal,
+        *,
+        environment: str | None = None,
+        tenant_id: str | None = None,
+        hours: int = 24,
+        limit: int = 50,
+        **filters: str | None,
+    ) -> dict[str, Any]:
+        """The decision log, newest first. Filters: agent_id, stage, decision (allow, modify,
+        block, escalate), outcome (the decision table's), request_id, session_id."""
+        unknown = set(filters) - set(DECISION_FILTERS)
+        if unknown:
+            raise ValueError(f"unknown decision filters: {sorted(unknown)}")
+        tenant_id, hours, where, params = self._window(p, environment, tenant_id, hours)
+        assert self.fetch is not None
+        clauses = [where]
+        for name in DECISION_FILTERS:
+            value = filters.get(name)
+            if value:
+                clauses.append(f"e.{name} = :{name}")
+                params[name] = value
+        params["limit"] = max(1, min(limit, MAX_DECISIONS))
+        rows = await self.fetch(DECISIONS_SQL.format(where=" AND ".join(clauses)), params)
+        return {
+            "environment": environment,
+            "tenant_id": tenant_id,
+            "hours": hours,
+            "decisions": [_decision_row(r) for r in rows],
+        }
+
+    async def decision(self, p: Principal, request_id: str, tenant_id: str | None = None) -> dict[str, Any] | None:
+        """One request's audit record (any age within the retention window)."""
+        out = await self.decisions(p, tenant_id=tenant_id, hours=MAX_HOURS, limit=1, request_id=request_id)
+        return out["decisions"][0] if out["decisions"] else None
+
+
+def _decision_row(r: dict[str, Any]) -> dict[str, Any]:
+    out = dict(r)
+    for col in JSON_COLUMNS:
+        v = out.get(col)
+        if isinstance(v, (str, bytes)):
+            out[col] = json.loads(v)
+    out["created_at"] = _iso(out["created_at"])
+    out["reason_codes"] = list(out.get("reason_codes") or [])
+    out["guardrail_results"] = out.get("guardrail_results") or []
+    out["latency_ms"] = _num(out.get("latency_ms"))
+    return out
 
 
 def _iso(v: Any) -> str:

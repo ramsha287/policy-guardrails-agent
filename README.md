@@ -1,169 +1,131 @@
-# Guardrail Platform for AI Agents
+# Policy guardrails for AI agents
 
-**A safety checkpoint between your AI agents and the world.** Before an agent sends a prompt,
-uses retrieved documents, calls a tool or returns an answer, it asks the guardrail gateway
-whether that's OK. The gateway checks the request against your policies, runs the guardrails you
-chose for that step, and answers **allow**, **modify**, **block** or **escalate** (send it to a
-person to decide). Every decision is logged.
+A security checkpoint between AI agents and what they touch. Before an agent sends a prompt, uses
+retrieved documents, calls a tool (or reads its result) or returns an answer, it asks the
+**guardrail gateway**. The gateway checks who the agent is, what the action really does, what the
+session has done so far and whether policy allows it, runs the content guardrails you chose, and
+answers **allow**, **modify** (redacted), **block** or **escalate** (a person decides). Every
+decision is audited without storing the text. A **control plane** with a web console manages the
+configuration, the review queue, an inventory of the agents in your environments (including the
+ones nobody registered), and the decision log.
 
-It's built from scratch, runs on k3s or any Kubernetes cluster, and any kind of
-guardrail (PII, prompt injection, toxicity, secrets, …) plugs in without changing the core.
+It runs with Docker Compose on a laptop and on any Kubernetes/k3s cluster with the Helm chart.
 
-![Architecture: AI agents call the Guardrail Gateway, which checks the key, scores the request, asks OPA, then runs guardrail plugins; the ai-gateway-pii plugin uses the AI Gateway (Presidio). The control plane configures gateways and serves the web console.](docs/images/architecture.png)
+## Architecture
 
-<sub>Editable source: [docs/images/architecture.svg](docs/images/architecture.svg)</sub>
+```mermaid
+flowchart LR
+  AG["AI agents<br/>SDK · LangGraph · CrewAI<br/>OpenAI proxy · AuthZEN"] -- "gk_ key" --> GW
+  P["People<br/>browser"] -- "cpk_ key" --> CP
+  subgraph Platform
+    GW["Guardrail gateway :8100<br/>identity → risk → OPA → guardrails<br/>→ advisors → decision table → audit"]
+    CP["Control plane :8200<br/>config · review queue · inventory<br/>decision log · console"]
+    OPA[OPA]
+    AIG["AI Gateway<br/>Presidio PII"]
+    DB[(Postgres)]
+    R[(Redis)]
+  end
+  GW --> OPA
+  GW --> AIG
+  GW <-- "snapshots, catalog,<br/>reviews, heartbeats" --> CP
+  GW --> DB
+  CP --> DB
+  GW <--> R
+  CP -- "discovery connectors" --> SRC["Audit log · Kubernetes · DNS logs<br/>OpenAI · Bedrock · MCP servers"]
+```
 
-## Guardrails
-
-> **Available now: the AI Gateway.** The platform ships with `ai-gateway-pii`, which connects
-> every agent to the existing **AI Gateway** (`services/ai-gateway`, Presidio). It finds personal
-> data in prompts, retrieved documents, tool calls and answers, redacts it, and blocks the
-> riskiest cases, such as SSNs, card numbers, or PII sent to external tools.
-
-| Guardrail | What it checks | Status |
+| Part | Code | Port |
 | --- | --- | --- |
-| **`ai-gateway-pii`**, via the **AI Gateway** | Personal data: emails, names, phone numbers, SSNs, card numbers, national IDs, your own patterns | **Available now.** On by default on input, retrieval, tool and output |
-| Policy checks (OPA) | Trust and risk scores, allowed tools, delegation depth, required guardrails | **Available now.** Always on |
-| `secrets` | API keys, tokens, private keys and passwords in any stage | Available. Shadow in dev; redacts or blocks when enforced |
-| `prompt-injection` | Instructions hidden in user input, retrieved documents and tool results (heuristic) | Available. Shadow in dev; measure before enforcing |
-| `topic-limits` | Denied topics, and requests outside what the agent is for | Available. Needs your topic lists |
-| `content-moderation` | Harassment, hate, violence, self-harm, sexual content (OpenAI-compatible moderation endpoint) | Available. Needs an endpoint and key |
-| Grounding, model-based injection detection, … | Other kinds of content | **Not built yet.** Add them as plugins ([how](docs/adding-a-guardrail.md)) |
+| Guardrail gateway: the agent API and every decision | `services/guardrail-gateway` | 8100 |
+| Control plane: tenants, keys, guardrail registry, publishing, review queue, discovery and inventory, analytics, decision log, playground; serves the console | `services/guardrail-control-plane` | 8200 |
+| Console (React) | `apps/console` | `/console` on 8200 |
+| AI Gateway: the existing PII redaction service behind `ai-gateway-pii` | `services/ai-gateway` | 8000, 8001 |
+| SDK: agent client, hooks, framework integrations, plugin contract | `packages/guardrail-sdk` | — |
+| OPA policy, Helm chart, SOPS secrets | `policies/`, `deploy/` | — |
 
-The full catalog, with what the AI Gateway detects, its settings and how every guardrail
-behaves, is in **[docs/guardrails.md](docs/guardrails.md)**.
+How one request moves through the gateway, how configuration reaches it, and how discovery feeds
+risk: [docs/architecture.md](docs/architecture.md).
 
-## What you get
+## What it does
 
-- **PII protection out of the box, through the AI Gateway.** Emails, names, IDs and the like are
-  redacted, and SSNs and card numbers are blocked. The privacy team manages the entity list and
-  custom patterns in one place, the AI Gateway project.
-- **Room for every other guardrail.** Local rules, remote services and ML models all use the same
-  plugin interface, conformance tests and shadow-then-enforce rollout.
-- **Four checkpoints per agent run:** input, retrieval, tool calls and output.
-- **Scores for agents and actions.** Each agent has a trust score and each action has a risk
-  score, and policies use both (for example "no risky actions in production for low-trust
-  agents").
-- **Human review.** Uncertain cases wait in a review queue in the web console, where a person
-  approves or rejects them.
-- **Safe changes.** Try changes in dev, run new guardrails in shadow mode, and publish to
-  production only after a second admin approves. Every publish can be rolled back.
-- **Separate tenants**, each with its own agents, keys, reviews and rate limits.
-- **Fails closed.** If anything breaks, the answer is block, in every environment.
+| Area | What you get | Status |
+| --- | --- | --- |
+| **Content guardrails** | `ai-gateway-pii` (Presidio: redact or block PII on all four stages; PII to external tools blocked), `secrets` (credentials, by format), `prompt-injection` (heuristic: jailbreaks in input, injected instructions in documents and tool results), `topic-limits`, `content-moderation` (OpenAI-compatible endpoint) | Implemented and tested. `secrets` and `prompt-injection` start in shadow in dev; moderation needs a key |
+| **Policy** | OPA: allowed tools per agent, trust and risk thresholds in production, delegation depth, PII must go through an enforced `ai-gateway-pii` | Implemented and tested |
+| **Context and risk** | Agent-bound keys, action descriptors (SQL/HTTP/file/message), session taint and data labels, named risk signals (`NEW_RESOURCE`, `TAINTED_SESSION`, `SENSITIVE_THEN_EXTERNAL`, …), bands, a decision table; `RISK_MODE` off / **shadow** (default) / enforce | Implemented and tested |
+| **Verification** | SQL dry run on a read replica, user confirmation through your IdP, or a person | Implemented and tested (IdP flow with dev tokens) |
+| **Human review** | Held requests in the console's Review queue; the agent polls; undecided = blocked after 15 min | Implemented and tested |
+| **Advisors** | Optional classifiers in the uncertain band, asked from derived features only; can add capped risk or ask a person, never permit; local model + HTTP/Bedrock providers; calibration from reviewers' decisions | Local: tested. HTTP/Bedrock: contract-tested only |
+| **Agent discovery** | Connectors (gateway audit log, Kubernetes, DNS logs, OpenAI Admin, Bedrock/AgentCore, MCP servers) → managed / unmanaged / shadow / stale agents with evidence and findings; MCP tool definitions pinned (rug-pull detection); open findings raise risk at the gateway | gateway/DNS/MCP: tested live. Kubernetes/OpenAI/Bedrock: tested against recorded responses |
+| **Operations** | Safe changes (shadow → enforce, two-person production publish, rollback), multi-tenant RBAC, append-only hash-chained audit, decision events (Redis/webhook), rate limits, mTLS, Helm chart with alerts and runbooks | Implemented; chart rendered and validated in CI |
+| **Console** | Review queue, pipeline, simulate, **playground** (send real agent requests), **decision log**, inventory, connectors, analytics, advisors, keys | Implemented and tested (browser smoke test) |
 
-## Try it in 5 minutes
+The full matrix of implemented, tested, partial and planned work, with the tests behind each line,
+is in [docs/architecture.md](docs/architecture.md#what-is-built-and-how-well-it-is-tested).
+
+## Run it locally
 
 You need Docker.
 
 ```bash
 git clone https://github.com/ramsha287/policy-guardrails-agent && cd policy-guardrails-agent
-docker compose up --build
+docker compose up --build -d
+until curl -sf localhost:8100/ready >/dev/null; do sleep 5; done
+docker compose exec guardrail-control-plane cat /bootstrap/cp.env   # CP_ADMIN_KEY (you), CP_APPROVER_KEY (a second admin)
+docker compose exec guardrail-gateway cat /bootstrap/dev.env        # DEMO_GATEWAY_API_KEY (an agent)
 ```
 
-When it's up, get the keys the first run generated:
+The first run migrates the databases and seeds a `demo` tenant: agents `research-agent` (trust
+80, any tool), `support-bot` (70, `crm.lookup` and `database.read`) and `untrusted-agent` (20, no
+tools), an action catalog, an unbound gateway key, and a dev pipeline with `ai-gateway-pii`
+enforced and `secrets` and `prompt-injection` in shadow. The seed only loads into fresh volumes:
+`docker compose down -v` starts over.
 
-```bash
-docker compose exec guardrail-control-plane cat /bootstrap/cp.env   # CP_ADMIN_KEY (for you), CP_APPROVER_KEY (a second admin)
-docker compose exec guardrail-gateway cat /bootstrap/dev.env        # DEMO_GATEWAY_API_KEY (for an agent)
-```
-
-**Open the console:** http://localhost:8200/console/ and sign in with `CP_ADMIN_KEY`.
-
-**Act like an agent**, with the gateway key:
+**Act as an agent** with the gateway key:
 
 ```bash
 curl -s localhost:8100/v1/guard/input -H "X-API-Key: gk_..." -H 'content-type: application/json' -d '{
-  "agent_id": "research-agent", "action": "llm.chat", "user_id": "u1",
-  "data_classification": "PII",
-  "payload": {"text": "Email jane.doe@example.com about invoice EMP-123456"}
-}'
+  "agent_id": "research-agent", "action": "llm.chat", "session_id": "s1", "data_classification": "PII",
+  "payload": {"text": "Email jane.doe@example.com about invoice EMP-123456"}}'
 ```
 
-You get `"decision": "modify"` with the email and employee ID redacted by the AI Gateway. Try a
-US SSN and you get `block`. Then open **Analytics** or **Overview** in the console to see the requests you just made.
+You get `"decision": "modify"` with `Email [EMAIL_ADDRESS] about invoice [EMPLOYEE_ID]`, plus
+`outcome`, `reason_codes` and a `risk` block. A US SSN gives `block`.
 
-## The console in a minute
+Optional parts of the stack:
 
-The console (`/console` on the control plane) is where people run the platform. Agents never use
-it. The menu has three groups:
-
-| Group | Screen | What you do there |
-| --- | --- | --- |
-| **Operate**: day-to-day work | **Overview** | See today's traffic, blocks, held requests and gateway health at a glance |
-| | **Review queue** | Approve or reject requests a guardrail held for a person |
-| | **Publish approvals** | Approve a production change that another admin requested |
-| **Configure**: decide what runs | **Pipeline** | Choose which guardrails run in each environment and stage, in shadow or enforce mode, then publish or roll back |
-| | **Simulate** | Send a test request through your draft or the live pipeline and see the decision. Nothing is enforced or logged |
-| | **Guardrails** | See the registered guardrails (such as `ai-gateway-pii`), their versions and which gateways have them |
-| | **Tenants & keys** | Manage tenants, agents (trust score, allowed tools), actions (risk score) and the agents' gateway keys |
-| **Observe**: check it's working | **Gateways** | Check each gateway's last heartbeat, config version and health |
-| | **Analytics** | Decisions over time, by guardrail, stage and mode |
-| | **Activity log** | Who changed what, and when |
-| | **Admin keys** | Give people access to the console, and revoke it |
-
-**Your key decides what you see.** A tenant reviewer only sees the review queue and data for
-their own tenant. Platform admins see everything.
-
-**How a guardrail change goes live:**
-
-1. **Pipeline**: pick the environment and change a guardrail, for example set `ai-gateway-pii` to
-   `enforce`.
-2. **Simulate**: send a test request through the draft to check the result before publishing.
-3. **Review & publish**: see exactly what changes. In dev and staging it goes live at once. In
-   production it becomes a request.
-4. **Publish approvals**: a second admin approves the production request.
-5. **Gateways** pick up the new config within seconds. Watch **Analytics**, and roll back from
-   **Pipeline** if needed.
-
-**How a held request is handled:** a guardrail answers *escalate* → the agent waits → the request
-appears in the **Review queue** with the reason and a redacted preview → a reviewer approves
-(the agent carries on) or rejects (blocked). Anything not decided within 15 minutes is blocked.
-
-More detail, screen by screen: [docs/user-guide.md](docs/user-guide.md).
-
-## How to use it
-
-| I want to… | Read |
-| --- | --- |
-| See every guardrail, what the AI Gateway detects, and how to configure it | [Guardrails](docs/guardrails.md) |
-| Use the console: review held requests, change guardrails, simulate | [User guide](docs/user-guide.md) |
-| Put it in production, and give people access (admin keys) | [Production guide](docs/production.md) |
-| Install on k3s / Kubernetes with Helm | [Deployment](docs/deployment.md) |
-| Connect my agent (SDK, LangGraph, CrewAI, or OpenAI-compatible proxy) | [Agent integration](docs/agent-integration.md) |
-| Write a new guardrail | [Adding a guardrail](docs/adding-a-guardrail.md) |
-| Automate through the API | [Control plane API](docs/control-plane.md) |
-| Look up status codes, scoring rules, audit, tests, repo layout | [Reference](docs/reference.md) |
-| Handle an alert | [Runbooks](docs/runbooks/README.md) |
-
-### Who gets which key?
-
-There are two kinds of keys:
-
-- **Admin keys (`cpk_…`)** are for people and scripts that use the console or the control-plane
-  API. Each key has roles (`viewer`, `reviewer`, `reviewer-raw`, `editor`, `admin`) and can be
-  limited to one tenant.
-- **Gateway keys (`gk_…`)** are for AI agents calling the gateway. You create them in the
-  console under **Tenants & keys**.
-
-In production, the person who installs the platform creates the first admin key with one
-command. After that, admins give everyone else their own keys from the console's **Admin keys**
-page. The [production guide](docs/production.md#how-access-works) walks through it.
-
-## Connect an agent in a few lines
-
-With no code changes, point any OpenAI client at the gateway (proxy mode):
-
-```python
-client = OpenAI(base_url="http://localhost:8100/v1", api_key="gk_...")
+```bash
+docker compose --profile discovery-demo up -d mcp-demo                 # a demo MCP server for discovery
+RISK_MODE=enforce docker compose up -d guardrail-gateway                # apply the decision table
+MODERATION_API_KEY=sk-... docker compose up -d guardrail-gateway        # content-moderation
+docker compose -f docker-compose.yml -f docker-compose.mtls.yml up --build   # mTLS between services
 ```
 
-Or check each step yourself with the SDK:
+## Use the console
+
+Open http://localhost:8200/console/ and sign in with `CP_ADMIN_KEY`.
+
+1. **Playground** (Configure): paste `DEMO_GATEWAY_API_KEY`, pick a scenario — PII, an SSN, a
+   secret, a jailbreak, prompt injection in a document or a tool result, a tool the agent may not
+   use, PII to an external tool, an exfiltration chain, a changed MCP tool — and **Send as agent**.
+   You see the decision, the risk signals and each guardrail's result.
+2. **Decision log** (Observe): every request with its reason codes, signals, guardrail findings,
+   advisor answers and hash-chain position. No payload text.
+3. **Pipeline**: switch `secrets` or `prompt-injection` to enforce, publish, and send the same
+   scenarios again. Production changes need a second admin (**Publish approvals**).
+4. **Review queue**: held requests wait here; approve or reject, and the agent's poll follows.
+5. **Discovery connectors** → **Agent inventory**: run the `gateway` connector to see managed and
+   shadow agents; add DNS and MCP sources; accept or resolve findings.
+
+Every screen, role and flow: [docs/console.md](docs/console.md).
+
+## Connect an agent
 
 ```python
 from guardrail_sdk import GuardClient, GuardHooks, GuardrailBlocked
 
 async with GuardClient("http://localhost:8100", "gk_...", agent_id="research-agent") as client:
-    hooks = GuardHooks(client, user_id=user_id, data_classification="PII")
+    hooks = GuardHooks(client, data_classification="PII").with_context(user_id="u1", session_id="run-42")
     try:
         prompt = await hooks.before_llm(user_text)                 # input
         chunks = await hooks.on_retrieval(search(prompt))          # retrieval
@@ -172,71 +134,96 @@ async with GuardClient("http://localhost:8100", "gk_...", agent_id="research-age
         answer = f"Request blocked: {exc.reason}"
 ```
 
-Proxy mode is off by default (`PROXY_ENABLED=true` turns it on).
+Tools (`guard_tool`), LangGraph, CrewAI, the OpenAI-compatible proxy (`PROXY_ENABLED=true`), user
+confirmation and status codes: [docs/agent-integration.md](docs/agent-integration.md).
 
-## What's inside
+## Configuration
 
-| Part | Port | What it does |
-| --- | --- | --- |
-| `services/guardrail-gateway` | 8100 | Checks every agent request, runs the guardrails and writes the audit log |
-| `services/guardrail-control-plane` | 8200 | Stores config, tenants, keys and the review queue; serves the console at `/console` |
-| `apps/console` | — | The web console (React) |
-| `services/ai-gateway` | 8000/8001 | **The AI Gateway**: the existing PII redaction service behind `ai-gateway-pii` |
-| `packages/guardrail-sdk` | — | Python SDK for agents and for writing guardrails |
-| `deploy/helm/guardrail-platform` | — | Helm chart for k3s/Kubernetes |
-| `policies/guardrails` | — | OPA (Rego) policies |
+Docker Compose sets everything for a laptop. The settings you're most likely to change:
 
-Full layout: [docs/reference.md](docs/reference.md#repository-layout).
+| Setting | Where | Default | Meaning |
+| --- | --- | --- | --- |
+| `RISK_MODE` | gateway | `shadow` | `off`, `shadow` (compute and audit the risk outcome) or `enforce` |
+| `REQUIRE_BOUND_KEYS` | gateway | `false` | Refuse gateway keys not bound to one agent |
+| `ADVISORS_JSON` | gateway | local advisor in shadow (Compose) | Advisors, their mode and caps |
+| `VERIFY_OIDC_*`, `VERIFY_SQL_DRY_RUN` | gateway | — | User confirmation (your IdP), SQL dry run (a read replica) |
+| `MODERATION_API_KEY` | gateway | — | Enables `content-moderation` |
+| `OUTBOX_SINKS` | gateway | `redis` (Compose) | Decision events to Redis and/or a signed webhook |
+| `TWO_PERSON_ENVIRONMENTS` | control plane | `["production"]` | Environments that need a second admin to publish |
+| `AUDIT_DSN` | control plane | Compose: set | Decision log, Analytics, Advisors and the gateway connector |
+| `PLAYGROUND_ENVIRONMENTS` | control plane | `[]` (Compose: `["dev"]`) | Where the console may send real agent requests |
+| `REVIEW_ENCRYPTION_KEY`, `INTERNAL_TOKEN` | control plane (+ gateway) | dev values | Set real ones outside dev |
 
-## Run the tests
+Every variable for both services, the APIs and the CLI: [docs/reference.md](docs/reference.md).
+Kubernetes/k3s install, access, monitoring and upgrades: [docs/operations.md](docs/operations.md).
+
+## Security flows at a glance
+
+| Threat | What stops it |
+| --- | --- |
+| PII in prompts, documents, tool calls, answers | `ai-gateway-pii` redacts; SSNs/cards and PII to external tools are blocked; OPA requires it for PII data |
+| Credentials leaking | `secrets` redacts or blocks (private keys always) |
+| Jailbreaks and prompt injection | `prompt-injection` holds or blocks input and tool results and drops injected chunks; independent of detection, session taint raises the risk of later tool calls |
+| Exfiltration after reading untrusted content | `TAINTED_SESSION`, `NEW_RESOURCE`, `SENSITIVE_THEN_EXTERNAL` → verify or hold in enforce mode; advisors can add friction, never permit |
+| An agent doing what it may not | OPA: tool allow-lists, trust/risk thresholds; agent-bound keys stop one agent acting as another |
+| Unregistered (shadow) agents and agents bypassing the gateway | Discovery finds them; open findings raise those agents' risk |
+| A trusted MCP tool changing after approval | Pinned definitions; `TOOL_DEFINITION_CHANGED` until someone accepts the change |
+| A platform failure | Fail-closed everywhere: no config, OPA down, guardrail error, review queue unreachable → block |
+| Tampering with the record | Append-only, hash-chained audit with exported chain heads; payloads only as hashes |
+
+## Testing
 
 ```bash
-pip install -e "packages/guardrail-sdk[test]" -r services/guardrail-gateway/requirements-dev.txt
-pytest packages/guardrail-sdk tests/e2e
+pip install -e "packages/guardrail-sdk[test]" -r services/guardrail-gateway/requirements-dev.txt -r services/guardrail-control-plane/requirements-dev.txt
+pytest packages/guardrail-sdk && (cd services/guardrail-gateway && pytest) && (cd services/guardrail-control-plane && pytest)
 opa test policies
-cd apps/console && npm install && npm test && npm run build && npm run e2e
+(cd apps/console && npm install && npm test && npm run build && npm run e2e)
+pytest tests/e2e      # against the running stack: set GUARDRAIL_E2E_URL/KEY, CONTROL_PLANE_E2E_URL, CP_E2E_ADMIN_KEY
 ```
 
-Every suite, including the Postgres ones, is listed in [docs/reference.md](docs/reference.md#tests).
+The suites, the live security-flow tests, and **23 frontend test cases** that walk every main
+security flow from the console (with the expected result of each): [docs/testing.md](docs/testing.md).
 
-## Project status
+## MVP status and limitations
 
-All five phases of the build plan are done: foundations, gateway and engine, the AI Gateway PII
-guardrail, retrieval and tool stages, the control plane with human review, and hardening for
-production (console, Helm chart, mTLS, SOPS secrets, rate limits, durable audit, alerts and
-dashboards, proxy mode, multi-arch images).
+The MVP is functional end to end: agent → gateway → policy, guardrails, risk, advisors, review →
+audit → console, with discovery feeding risk. What it is not yet:
 
-**Phase 6, contextual decisions:** sprint A adds agent-bound keys, deterministic
-action descriptors, session state, reason-coded risk, a decision table and hash-chained decision
-records. Sprint B adds verification (SQL dry run and user confirmation instead of always asking a
-reviewer), an OpenID AuthZEN decision API and decision events through a Postgres outbox. It runs
-in shadow mode by default. See [docs/contextual-decisions.md](docs/contextual-decisions.md), and
-[docs/testing-contextual-decisions.md](docs/testing-contextual-decisions.md) to check it works.
+- **Gate 1 is not fully measured.** Latency is measured (p99 ≈ 4–6 ms with OPA on a dev
+  container, budget 15 ms); shadow-agent discovery must be run on your pilot's sources; the
+  exfiltration attack-success rate (< 5%) must be measured by your security team against staging
+  ([docs/testing.md](docs/testing.md#gate-1)).
+- **Shadow by default.** `RISK_MODE=shadow`, and `secrets`, `prompt-injection` and the local
+  advisor start in shadow. Measure on your traffic before enforcing; the local advisor's weights
+  are hand-set until calibrated.
+- **Heuristics.** `prompt-injection` is pattern-based and misses paraphrases; the SQL parser is
+  conservative (unclear statements cost risk).
+- **Not tested against real external services here:** the IdP for user confirmation, hosted
+  advisors (HTTP/Bedrock), the moderation API, and the Kubernetes/OpenAI/Bedrock connectors (tested
+  with recorded responses).
+- **Agents must call the gateway.** There is no MCP proxy or Envoy `ext_authz` enforcement point
+  yet, so a tool call is only checked when the agent (or an AuthZEN-speaking PEP) asks; discovery
+  finds agents that don't. Proxy mode can't resume a held request.
+- **Hardening left to the operator:** rate limits are per replica; services share one
+  `INTERNAL_TOKEN` (add mTLS identities); admin keys are bearer tokens (put the console behind your
+  SSO); `/metrics` has no auth (keep it in the cluster). See
+  [docs/security-review.md](docs/security-review.md#known-risks-to-accept-or-fix).
+- **Planned:** NATS JetStream for events, MCP elicitation for user confirmation, a response
+  engine for shadow agents (egress deny), model-based injection detection, grounding, tool-argument
+  and step/cost guardrails, more discovery sources (CloudTrail, Azure, GCP).
 
-**Phase 7, agent discovery and inventory:** connectors (our gateway's audit log, Kubernetes, DNS
-query logs, OpenAI, Bedrock/AgentCore, MCP servers) find the agents in your environments, including
-the ones nobody registered, and reconcile them with the registry: managed, registered-but-unmanaged,
-shadow or stale, with evidence, a relation graph, coverage, findings and MCP tool-definition
-pinning. The console has an Agent inventory and a Discovery connectors screen. See
-[docs/discovery.md](docs/discovery.md) and [docs/testing-discovery.md](docs/testing-discovery.md).
+## Documentation
 
-**Phase 8, advisors:** optional, pluggable classifiers asked only when a request is already in the
-uncertain risk band. They answer one typed question (exfiltration, injection) from derived features
-— never the request's text — and can only tighten the decision: add capped risk or ask a person to
-confirm, never permit. A local in-process model, an HTTPS endpoint (for a vendor classifier or the
-Jev pilot) and a Bedrock LLM judge ship as providers; hosted ones follow a per-tenant data policy
-and are off by default. Run them in shadow mode and read the console's Advisors pilot before
-enforcing. See [docs/advisors.md](docs/advisors.md) and
-[docs/testing-advisors.md](docs/testing-advisors.md). The adaptive red-team harness that measures
-Gate 1 (exfiltration attack success) is run against a staging gateway, outside this repository.
-
-**Phase 9, Gate 1 readiness and new guardrails:** four guardrails (`secrets`, `prompt-injection`,
-`topic-limits`, `content-moderation`); open inventory findings now raise risk on the gateway
-(`AGENT_FINDING`, `TOOL_DEFINITION_CHANGED`); a fast-path latency benchmark for the gate's
-"under 15 ms at p99" (`python -m app.bench`); and calibration of the local advisor from what your
-reviewers and users decided. See [docs/gate-1.md](docs/gate-1.md) and
-[docs/guardrails.md](docs/guardrails.md).
-
-**Guardrails today:** `ai-gateway-pii` (the AI Gateway), `secrets`, `prompt-injection`,
-`topic-limits`, `content-moderation` and the OPA policy checks. See
-[docs/guardrails.md](docs/guardrails.md).
+| Doc | For |
+| --- | --- |
+| [architecture.md](docs/architecture.md) | Components, request lifecycle, data flows, status matrix |
+| [decisions.md](docs/decisions.md) | Risk signals, policy, decision table, advisors, verification, AuthZEN, events, audit chain |
+| [guardrails.md](docs/guardrails.md) | Every guardrail and its settings; writing a new one |
+| [discovery.md](docs/discovery.md) | Agent discovery and inventory, connectors, findings |
+| [console.md](docs/console.md) | Using the console: roles, every screen, review, publish, playground, decision log |
+| [agent-integration.md](docs/agent-integration.md) | SDK, tools, LangGraph, CrewAI, proxy mode, status codes |
+| [reference.md](docs/reference.md) | APIs, every setting, CLI, repository layout |
+| [operations.md](docs/operations.md) | Helm/k3s install, access and admin keys, monitoring, upgrades |
+| [testing.md](docs/testing.md) | Test suites, live end-to-end, frontend test cases, Gate 1 |
+| [runbooks.md](docs/runbooks.md) | One section per alert |
+| [security-review.md](docs/security-review.md) | Trust boundaries, defended areas, pen-test plan, accepted risks |

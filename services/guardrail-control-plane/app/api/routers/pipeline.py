@@ -155,8 +155,7 @@ async def history(
 
 @router.get("/environments/{environment}/snapshots/current")
 async def current(environment: str, p: Principal = Depends(principal), c: Container = Depends(container)):
-    await c.publishing.history(p, environment, 1)  # permission check
-    live = await c.ctx.store.current_snapshot(environment)
+    live = await c.publishing.snapshot(p, environment, None)
     if live is None:
         raise HTTPException(status_code=404, detail=f"nothing published in {environment} yet")
     return _snapshot(live, with_document=True)
@@ -166,8 +165,7 @@ async def current(environment: str, p: Principal = Depends(principal), c: Contai
 async def get_snapshot(
     environment: str, version: str, p: Principal = Depends(principal), c: Container = Depends(container)
 ):
-    await c.publishing.history(p, environment, 1)  # permission check
-    snap = await c.ctx.store.get_snapshot(environment, version)
+    snap = await c.publishing.snapshot(p, environment, version)
     if snap is None:
         raise HTTPException(status_code=404, detail=f"snapshot {version} not found")
     return _snapshot(snap, with_document=True)
@@ -180,7 +178,9 @@ async def list_requests(
     p: Principal = Depends(principal),
     c: Container = Depends(container),
 ):
-    return [r.model_dump(mode="json") for r in await c.publishing.requests(p, environment, status)]
+    # The proposed document is for the platform admins who approve it; tenant keys get the summary.
+    exclude = None if p.is_platform else {"document"}
+    return [r.model_dump(mode="json", exclude=exclude) for r in await c.publishing.requests(p, environment, status)]
 
 
 @router.post("/publish-requests/{request_id}/approve")

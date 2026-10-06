@@ -32,7 +32,8 @@ export interface Me {
   environments: Environment[];
   two_person_environments: Environment[];
   review_ttl_minutes: number;
-  features: { simulate: boolean; analytics: boolean; discovery?: boolean };
+  /** `playground` lists the environments where the console may send real agent requests. */
+  features: { simulate: boolean; analytics: boolean; discovery?: boolean; decisions?: boolean; playground?: Environment[] };
 }
 
 export const DATA_CLASSES = ["PUBLIC", "INTERNAL", "CONFIDENTIAL", "PII"] as const;
@@ -341,7 +342,7 @@ export interface GuardrailOutcome {
   latency_ms: number;
   mode: string;
   error: string | null;
-  findings: { entity_type?: string; start?: number; end?: number; score?: number; path?: string }[];
+  findings: { entity_type?: string; type?: string; start?: number; end?: number; score?: number; path?: string; location?: string }[];
 }
 
 export interface SimulationResult {
@@ -361,6 +362,123 @@ export interface SimulationResult {
     results: GuardrailOutcome[];
     payload: Record<string, unknown> | null;
   };
+}
+
+// ---- the gateway's answer (playground) and its audit record (decision log) ---------------------------
+
+export interface RiskSignal {
+  code: string;
+  points: number;
+  detail?: string;
+}
+
+export interface AdvisorAnswer {
+  advisor: string;
+  provider: string;
+  mode: string;
+  question: string;
+  status: string;
+  latency_ms: number;
+  label?: string;
+  confidence?: number;
+  points?: number;
+  verify?: boolean;
+  detail?: string;
+}
+
+export interface RiskInfo {
+  score: number;
+  band: "low" | "elevated" | "high" | "critical" | string;
+  trust: number;
+  confidence: number;
+  mode: string;
+  would_outcome: string;
+  signals: RiskSignal[];
+  /** Only in the audit record: the agent never sees advisor output. */
+  advisors?: { points: number; verify: boolean; shadow_points: number; shadow_verify: boolean; answers: AdvisorAnswer[] };
+}
+
+export interface GuardResponse {
+  request_id: string;
+  trace_id: string;
+  stage: Stage;
+  decision: Decision;
+  reason: string;
+  risk_score: number;
+  trust_score: number;
+  payload: Record<string, unknown> | null;
+  policy: { allow: boolean; reason: string; obligations: string[] };
+  results: GuardrailOutcome[];
+  snapshot_version: string | null;
+  escalation_id: string | null;
+  outcome: string | null;
+  reason_codes: string[];
+  obligations: Record<string, unknown>;
+  risk: RiskInfo | null;
+  assurance: string | null;
+  verification: { id: string; kind: string; status: string; expires_at: number; summary: string } | null;
+}
+
+/** Body of POST /v1/guard/{stage} (what an agent sends). */
+export interface GuardRequestBody {
+  agent_id: string;
+  action: string;
+  resource?: string | null;
+  user_id?: string | null;
+  session_id?: string | null;
+  data_classification: DataClassification;
+  payload: Record<string, unknown>;
+}
+
+export interface PlaygroundResult {
+  environment: Environment;
+  tenant_id: string;
+  key: { id: string; name: string; prefix: string; agent_id: string | null };
+  /** The gateway's HTTP status: 200, 202 (held or verify), 403 (denied), 401, 422, 429, 503. */
+  status: number;
+  retry_after: string | null;
+  /** The gateway's body as-is: a GuardResponse, an escalation status, or {error}. */
+  response: Partial<GuardResponse> & { error?: string; detail?: unknown; status?: string; reviewer?: string | null };
+}
+
+export interface DecisionRecord {
+  created_at: string;
+  tenant_id: string;
+  environment: Environment;
+  request_id: string;
+  trace_id: string;
+  stage: Stage;
+  agent_id: string;
+  user_id: string | null;
+  session_id: string | null;
+  action: string;
+  resource: string | null;
+  decision: Decision;
+  outcome: string | null;
+  reason: string;
+  reason_codes: string[];
+  risk_score: number;
+  trust_score: number;
+  policy_allow: boolean;
+  policy_reason: string;
+  guardrail_results: GuardrailOutcome[];
+  descriptor: Record<string, unknown> | null;
+  risk: RiskInfo | null;
+  assurance: string | null;
+  snapshot_version: string | null;
+  latency_ms: number | null;
+  payload_sha256: string;
+  chain_id: string | null;
+  chain_seq: number | null;
+  prev_hash: string | null;
+  record_hash: string | null;
+}
+
+export interface DecisionLog {
+  environment: Environment | null;
+  tenant_id: string | null;
+  hours: number;
+  decisions: DecisionRecord[];
 }
 
 // ---- agent discovery and inventory (/inv/v1) ------------------------------------------------------

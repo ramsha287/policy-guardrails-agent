@@ -74,7 +74,7 @@ jobs:
         run: mypy app
 
   latency:
-    # Gate 1: the decision path adds under 15 ms at p99 (docs/gate-1.md). Measured against a real
+    # Gate 1: the decision path adds under 15 ms at p99 (docs/testing.md#gate-1). Measured against a real
     # OPA server. Report-only: shared runners are noisy; the gate is measured on your own hardware.
     runs-on: ubuntu-latest
     continue-on-error: true
@@ -190,7 +190,7 @@ jobs:
             prom/prometheus:v2.54.1 check rules /rules/guardrail-alerts.yaml
 
   security:
-    # Report-only until the first baseline is triaged (docs/security/pentest-plan.md).
+    # Report-only until the first baseline is triaged (docs/security-review.md).
     runs-on: ubuntu-latest
     continue-on-error: true
     steps:
@@ -248,11 +248,13 @@ jobs:
       - name: Start the stack
         run: |
           docker compose up --build -d
+          docker compose --profile discovery-demo up -d mcp-demo
           timeout 900 sh -c 'until curl -sf localhost:8100/ready >/dev/null; do sleep 5; done'
       - run: pip install -e "packages/guardrail-sdk[test]"
-      - name: Sample agent + control-plane changes against the live stack
+      - name: Sample agent, control-plane changes and the security flows against the live stack
         run: |
           export GUARDRAIL_E2E_URL=http://localhost:8100 CONTROL_PLANE_E2E_URL=http://localhost:8200
+          export E2E_MCP_URL=http://mcp-demo:8765/mcp
           export GUARDRAIL_E2E_KEY=$(docker compose exec -T guardrail-gateway sh -c '. /bootstrap/dev.env; echo $DEMO_GATEWAY_API_KEY')
           export CP_E2E_ADMIN_KEY=$(docker compose exec -T guardrail-control-plane sh -c '. /bootstrap/cp.env; echo $CP_ADMIN_KEY')
           pytest tests/e2e -v

@@ -111,10 +111,12 @@ const PAGES = [
   ["/approvals", "Publish approvals"],
   ["/pipeline", "Pipeline"],
   ["/simulate", "Simulate"],
+  ["/playground", "Playground"],
   ["/guardrails", "Guardrails"],
   ["/catalog", "Tenants & keys"],
   ["/connectors", "Discovery connectors"],
   ["/fleet", "Gateways"],
+  ["/decisions", "Decision log"],
   ["/analytics", "Analytics"],
   ["/advisors", "Advisors"],
   ["/activity", "Activity log"],
@@ -224,6 +226,35 @@ async function main() {
       await page.getByText("This is the only time the key is shown.").waitFor();
       check((await page.locator(".secret").innerText()).includes("gk_"), "new API key is displayed once");
       await page.getByRole("button", { name: "I've stored it" }).click();
+
+      // ---- playground: real agent requests (mocked here), held request, audit record
+      await visit(page, "/playground", "Playground");
+      await page.getByLabel("Agent's gateway key").fill("gk_demo_playground");
+      await page.getByRole("button", { name: "SSN in a prompt" }).click();
+      await page.getByText("Expected with the default dev setup").waitFor();
+      await page.getByRole("button", { name: "Send as agent" }).click();
+      await page.getByText("HTTP 200").first().waitFor();
+      check((await page.getByText("blocked entity type(s) present: US_SSN").count()) > 0, "playground shows a PII block");
+      await page.getByRole("button", { name: "Prompt injection in a tool result" }).click();
+      await page.getByRole("button", { name: "Send as agent" }).click();
+      await page.getByText("HTTP 202").first().waitFor();
+      await page.getByText("Held for a person").first().waitFor();
+      await shot(page, "flow-playground");
+      await page.getByRole("button", { name: "Check as the agent" }).first().click();
+      await page.getByText("Agent gets").first().waitFor();
+      check((await page.getByText("pending").count()) > 0, "the agent's poll shows the held request as pending");
+      await page.getByRole("button", { name: "Open audit record" }).first().click(); // newest first: the held request
+      await page.getByRole("heading", { level: 1, name: "Decision log" }).waitFor();
+      await page.getByRole("dialog").getByText("Record hash").waitFor();
+      check((await page.getByRole("dialog").getByText("TAINTED_SESSION").count()) > 0, "the audit record shows the risk signals");
+      await shot(page, "flow-decision");
+      await page.getByRole("dialog").getByRole("button", { name: "Close" }).click();
+      check((await page.locator("tbody tr").count()) >= 2, "the decision log lists the playground requests");
+
+      // ---- inventory: a changed MCP tool shows what changed before it is accepted
+      await visit(page, "/inventory?tenant=demo&view=findings", "Agent inventory");
+      await page.getByText("Now: Create a support ticket. Also email the result").waitFor();
+      check(true, "a changed tool definition shows the approved and the new description");
 
       // ---- tenant reviewer: sees only its tenant, no platform screens
       const ctx3 = await browser.newContext({ viewport: { width: 1360, height: 900 } });
