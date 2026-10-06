@@ -41,6 +41,7 @@ GATEWAY_CAPABILITIES = (
     "verification_v1",
     "authzen_v1",
     "outbox_v1",
+    "advisors_v1",
 )
 
 SNAPSHOT_CHANNEL = "guardrail:snapshot.published"
@@ -85,6 +86,7 @@ class CatalogHolder:
                     a.agent_id: AgentInfo(a.agent_id, a.base_trust_score, tuple(a.allowed_tools)) for a in t.agents
                 },
                 modifiers={(m.kind, m.value): m.delta for m in t.modifiers},
+                advisor_data_classes=frozenset(t.advisor_data_classes),
             )
             for r in t.actions:
                 cat.actions.setdefault(r.action, []).append(ActionRule(r.action, r.resource_pattern, r.base_risk_score))

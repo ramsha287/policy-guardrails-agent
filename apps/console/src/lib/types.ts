@@ -35,11 +35,54 @@ export interface Me {
   features: { simulate: boolean; analytics: boolean; discovery?: boolean };
 }
 
+export const DATA_CLASSES = ["PUBLIC", "INTERNAL", "CONFIDENTIAL", "PII"] as const;
+export type DataClass = (typeof DATA_CLASSES)[number];
+
 export interface Tenant {
   id: string;
   name: string;
   status: "active" | "suspended";
   created_at: string;
+  /** Data classes hosted advisors may see (empty = none). Absent from control planes before 0.9. */
+  advisor_data_classes?: DataClass[];
+}
+
+export interface AdvisorAgreement {
+  flagged_stopped: number;
+  flagged_released: number;
+  benign_stopped: number;
+  benign_released: number;
+}
+
+export interface AdvisorSummary {
+  advisor: string;
+  provider: string;
+  mode: "shadow" | "enforce";
+  questions: number;
+  by_status: Record<string, number>;
+  by_label: Record<string, number>;
+  points: number;
+  verify_requests: number;
+  no_signal_rate: number;
+  agreement: AdvisorAgreement;
+}
+
+export interface AdvisorAnalytics {
+  environment: Environment | null;
+  tenant_id: string | null;
+  hours: number;
+  advisors: AdvisorSummary[];
+  rows: {
+    advisor: string;
+    mode: string;
+    question: string;
+    status: string;
+    label: string;
+    n: number;
+    avg_latency_ms: number | null;
+    p95_latency_ms: number | null;
+    avg_confidence: number | null;
+  }[];
 }
 
 export interface ApiKey {

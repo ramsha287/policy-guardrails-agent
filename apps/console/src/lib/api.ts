@@ -5,6 +5,7 @@ import type {
   ActionRule,
   AdminKey,
   Agent,
+  AdvisorAnalytics,
   Analytics,
   ApiKey,
   Assignment,
@@ -34,6 +35,7 @@ import type {
   SimulationResult,
   Snapshot,
   Stage,
+  DataClass,
   Tenant,
 } from "./types";
 
@@ -200,6 +202,12 @@ export class Api {
   setTenantStatus(id: string, status: Tenant["status"]) {
     return this.request<Tenant>("PATCH", `/tenants/${encodeURIComponent(id)}`, { status });
   }
+  /** Which data classes hosted advisors may see for this tenant ([] turns them off). */
+  setAdvisorPolicy(tenant: string, dataClasses: DataClass[]) {
+    return this.request<Tenant>("PUT", `/tenants/${encodeURIComponent(tenant)}/advisor-policy`, {
+      data_classes: dataClasses,
+    });
+  }
   apiKeys(tenant: string) {
     return this.get<ApiKey[]>(`/tenants/${encodeURIComponent(tenant)}/api-keys`);
   }
@@ -287,6 +295,9 @@ export class Api {
   }
   analytics(filter: { environment?: Environment | ""; tenant_id?: string; hours?: number } = {}) {
     return this.get<Analytics>("/analytics/guardrails", filter);
+  }
+  advisorAnalytics(filter: { environment?: Environment | ""; tenant_id?: string; hours?: number } = {}) {
+    return this.get<AdvisorAnalytics>("/analytics/advisors", filter);
   }
   simulate(body: {
     environment: Environment;

@@ -24,6 +24,7 @@ class BuiltContext:
     context: SecurityContext
     agent: AgentInfo | None
     action_known: bool
+    advisor_data_classes: frozenset[str] = frozenset()
 
     def policy_input(self, stage: Stage, tool_name: str | None) -> dict[str, Any]:
         """The document OPA evaluates. Payload text is never sent to OPA."""
@@ -85,4 +86,4 @@ class ContextBuilder:
             delegation_chain=req.delegation_chain,
             tool_metadata=req.tool_metadata,
         )
-        return BuiltContext(ctx, agent, rule is not None)
+        return BuiltContext(ctx, agent, rule is not None, cat.advisor_data_classes)

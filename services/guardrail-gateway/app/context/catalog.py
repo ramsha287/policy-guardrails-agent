@@ -35,6 +35,8 @@ class TenantCatalog:
     agents: dict[str, AgentInfo] = field(default_factory=dict)
     actions: dict[str, list[ActionRule]] = field(default_factory=dict)
     modifiers: dict[tuple[str, str], int] = field(default_factory=dict)
+    # Data classes the tenant allows hosted advisors to see (app/advise). Empty = none (default).
+    advisor_data_classes: frozenset[str] = frozenset()
 
     def agent(self, agent_id: str) -> AgentInfo | None:
         return self.agents.get(agent_id)

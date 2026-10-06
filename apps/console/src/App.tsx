@@ -9,6 +9,7 @@ import { SessionProvider, useAuth, useSession } from "./lib/session";
 import type { Permission } from "./lib/types";
 import { ActivityPage } from "./pages/Activity";
 import { AdminKeysPage } from "./pages/AdminKeys";
+import { AdvisorsPage } from "./pages/Advisors";
 import { AnalyticsPage } from "./pages/Analytics";
 import { ApprovalsPage } from "./pages/Approvals";
 import { CatalogPage } from "./pages/Catalog";
@@ -74,6 +75,13 @@ const NAV: NavItem[] = [
     group: "Observe",
     visible: (s) => s.can("read") && s.me.features.analytics,
     render: () => <AnalyticsPage />,
+  },
+  {
+    path: "/advisors",
+    label: "Advisors",
+    group: "Observe",
+    visible: (s) => s.can("read") && s.me.features.analytics,
+    render: () => <AdvisorsPage />,
   },
   { path: "/activity", label: "Activity log", group: "Observe", visible: platform, render: () => <ActivityPage /> },
   {

@@ -135,6 +135,16 @@ spec:
             {{- if $g.contextual.riskConfig }}
             - {name: RISK_CONFIG_JSON, value: {{ $g.contextual.riskConfig | toJson | quote }}}
             {{- end }}
+            {{- if $g.advisors }}
+            - name: ADVISORS_JSON
+              value: {{ if kindIs "string" $g.advisors }}{{ $g.advisors | quote }}{{ else }}{{ $g.advisors | toJson | quote }}{{ end }}
+            {{- end }}
+            {{- range $g.advisorSecretKeys | default list }}
+            {{- if not (hasPrefix "ADVISOR_SECRET_" .) }}
+            {{- fail (printf "gateway.advisorSecretKeys: %s must start with ADVISOR_SECRET_" .) }}
+            {{- end }}
+            {{- include "gp.secretEnv" (dict "root" $ "name" . "optional" true) | nindent 12 }}
+            {{- end }}
             {{- with $g.verification }}
             - {name: VERIFICATION_ENABLED, value: {{ .enabled | toString | quote }}}
             {{- if .oidcIssuer }}

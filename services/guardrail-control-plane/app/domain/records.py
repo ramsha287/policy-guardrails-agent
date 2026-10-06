@@ -30,6 +30,8 @@ class TenantRecord(Record):
     name: str
     status: Literal["active", "suspended"] = "active"
     created_at: datetime = Field(default_factory=utcnow)
+    # Data classes hosted advisors may see for this tenant (gateway app/advise). Empty = none.
+    advisor_data_classes: list[Literal["PUBLIC", "INTERNAL", "CONFIDENTIAL", "PII"]] = Field(default_factory=list)
 
 
 class ApiKeyRecord(Record):

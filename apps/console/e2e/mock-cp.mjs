@@ -66,8 +66,8 @@ const state = {
     { id: "k-acme-raw", name: "acme-raw", prefix: "cpk_acme_ra", roles: ["reviewer-raw"], tenant_id: "acme", raw: "cpk_acme_raw" },
   ].map((k) => ({ ...k, is_active: true, created_at: ago(60 * 24 * 7) })),
   tenants: [
-    { id: "demo", name: "Demo", status: "active", created_at: ago(60 * 24 * 30) },
-    { id: "acme", name: "Acme Corp", status: "active", created_at: ago(60 * 24 * 10) },
+    { id: "demo", name: "Demo", status: "active", created_at: ago(60 * 24 * 30), advisor_data_classes: [] },
+    { id: "acme", name: "Acme Corp", status: "active", created_at: ago(60 * 24 * 10), advisor_data_classes: ["INTERNAL"] },
   ],
   apiKeys: [
     { id: randomUUID(), tenant_id: "demo", name: "research-agent", prefix: "gk_3f9a1c2d", scopes: ["guard:invoke"], environments: null, is_active: true, expires_at: null, created_at: ago(60 * 24 * 30), revoked_at: null, agent_id: "research-agent" },
@@ -279,6 +279,41 @@ function analytics(query, p) {
     ],
     timeseries,
   };
+}
+
+function advisorAnalytics(query, p) {
+  const hours = Math.min(2160, Math.max(1, Number(query.hours ?? 168)));
+  const tenant_id = p.platform ? query.tenant_id || null : p.tenant_id;
+  const mk = (advisor, provider, mode, label_mix, no_signal, agree) => {
+    const answered = 500;
+    const by_label = { benign: Math.round(answered * label_mix.benign), suspicious: Math.round(answered * label_mix.suspicious), malicious: Math.round(answered * label_mix.malicious) };
+    const timeouts = Math.round((answered / (1 - no_signal)) * no_signal);
+    const questions = answered + timeouts;
+    const flagged = by_label.suspicious + by_label.malicious;
+    return {
+      advisor, provider, mode, questions,
+      by_status: { answered, ...(timeouts ? { timeout: timeouts } : {}) },
+      by_label,
+      points: by_label.malicious * 10 + by_label.suspicious * 4,
+      verify_requests: Math.round(by_label.malicious * 0.5),
+      no_signal_rate: Number((timeouts / questions).toFixed(4)),
+      agreement: { flagged_stopped: Math.round(flagged * agree), flagged_released: Math.round(flagged * (1 - agree)), benign_stopped: 2, benign_released: by_label.benign - 2 },
+    };
+  };
+  const advisors = [
+    mk("local", "local", "enforce", { benign: 0.9, suspicious: 0.07, malicious: 0.03 }, 0.004, 0.86),
+    mk("jev-pilot", "http", "shadow", { benign: 0.82, suspicious: 0.12, malicious: 0.06 }, 0.03, 0.74),
+  ];
+  const rows = advisors.flatMap((a) =>
+    ["exfiltration", "injection"].flatMap((q) =>
+      ["benign", "suspicious", "malicious"].map((label) => ({
+        advisor: a.advisor, mode: a.mode, question: q, status: "answered", label,
+        n: Math.round((a.by_label[label] ?? 0) / 2), avg_latency_ms: a.provider === "http" ? 120 : 3.2,
+        p95_latency_ms: a.provider === "http" ? 240 : 7.5, avg_confidence: 0.8,
+      })),
+    ),
+  );
+  return { environment: query.environment || null, tenant_id, hours, advisors, rows };
 }
 
 // ---- routes ----------------------------------------------------------------------------------------
@@ -499,6 +534,14 @@ route("PATCH", "/tenants/:t", ({ p, params, body }) => {
   log("tenant", t.id, body.status === "active" ? "activate" : "suspend", p.actor);
   return t;
 });
+route("PUT", "/tenants/:t/advisor-policy", ({ p, params, body }) => {
+  p.require("catalog:write", params.t);
+  const t = state.tenants.find((x) => x.id === params.t);
+  if (!t) throw new HttpError(404, "tenant not found");
+  const ok = ["PUBLIC", "INTERNAL", "CONFIDENTIAL", "PII"];
+  t.advisor_data_classes = ok.filter((c) => (body.data_classes ?? []).includes(c));
+  return t;
+});
 route("GET", "/tenants/:t/api-keys", ({ p, params }) => (p.require("read", params.t), state.apiKeys.filter((k) => k.tenant_id === params.t)));
 route("POST", "/tenants/:t/api-keys", ({ p, params, body }) => {
   p.require("catalog:write", params.t);
@@ -598,6 +641,7 @@ route("DELETE", "/admin-keys/:id", ({ p, params }) => {
   return null;
 });
 route("GET", "/analytics/guardrails", ({ p, query }) => (p.require("read", query.tenant_id || p.tenant_id), analytics(query, p)));
+route("GET", "/analytics/advisors", ({ p, query }) => (p.require("read", query.tenant_id || p.tenant_id), advisorAnalytics(query, p)));
 route("POST", "/simulate", ({ p, body }) => {
   p.require("read", body.tenant_id);
   if (!state.tenants.some((t) => t.id === body.tenant_id)) throw new HttpError(404, `tenant ${body.tenant_id} not found`);

@@ -79,6 +79,12 @@ gateway:
     requireBoundKeys: false         # true = refuse API keys not bound to one agent (A0)
     internalDomains: ""             # comma-separated, e.g. "acme.com,acme.internal"
     riskConfig: {}                  # overrides for RiskConfig weights/limits, e.g. {elevated_row_limit: 500}
+  # Advisors: optional classifiers asked only in the uncertain band; they can add capped risk or ask
+  # for verification, never permit. JSON list, or {advisors: [...], total_cap: 20, bands: [...]}.
+  # local advisors run in-process; http/bedrock are hosted and follow each tenant's advisor data
+  # policy (Tenants & keys -> Advisors). Credentials are names of ADVISOR_SECRET_* secret keys.
+  advisors: ""                      # "" = no advisors. Example: '[{"name":"local","provider":"local","mode":"shadow"}]'
+  advisorSecretKeys: []             # ADVISOR_SECRET_* keys in the platform Secret (http advisor auth_env)
   # Verification engine: what a `verify` outcome may use before falling back to human review.
   verification:
     enabled: true

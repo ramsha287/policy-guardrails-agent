@@ -12,6 +12,8 @@ from collections.abc import Sequence
 from datetime import datetime, timedelta
 from typing import Any
 
+from pydantic import ValidationError
+
 from ..domain.compiler import build_catalog, catalog_content_hash, catalog_version, etag
 from ..domain.rbac import Permission, Principal
 from ..domain.records import (
@@ -30,6 +32,7 @@ from .context import Ctx
 
 GATEWAY_KEY_PREFIX = "gk_"
 BOUND_KEYS_CAPABILITY = "agent_bound_keys"  # reported in gateway heartbeats from 0.6
+ADVISORS_CAPABILITY = "advisors_v1"  # reported from 0.9: gateways that read the tenant advisor policy
 BINDING_GATEWAY_WINDOW_MINUTES = 15  # gateways heard from this recently must support bound keys
 
 
@@ -188,17 +191,44 @@ class CatalogService:
     async def _require_binding_support(self) -> None:
         """Gateways older than 0.6 reject a catalog that contains a bound key (and then keep serving
         their last good catalog, missing later revocations). Refuse to bind while one is live."""
+        await self._require_capability(BOUND_KEYS_CAPABILITY, "0.6", "binding keys to agents", "bound keys")
+
+    async def _require_capability(self, capability: str, version: str, action: str, feature: str) -> None:
         recent = utcnow() - timedelta(minutes=BINDING_GATEWAY_WINDOW_MINUTES)
         old = [
             g.gateway_id
             for g in await self.store.list_gateways()
-            if g.last_seen >= recent and BOUND_KEYS_CAPABILITY not in g.capabilities
+            if g.last_seen >= recent and capability not in g.capabilities
         ]
         if old:
             raise ValidationFailed(
-                "upgrade these gateways to 0.6 or later before binding keys to agents "
-                f"(older gateways can't read bound keys): {', '.join(sorted(old))}"
+                f"upgrade these gateways to {version} or later before {action} "
+                f"(older gateways can't read {feature}): {', '.join(sorted(old))}"
             )
+
+    async def set_advisor_policy(self, p: Principal, tenant_id: str, data_classes: Sequence[str]) -> TenantRecord:
+        """Which data classes hosted advisors (a vendor classifier, an LLM judge) may see for this
+        tenant. Opt-in per class; the tenant's own admins decide. Empty turns hosted advisors off."""
+        p.require(Permission.CATALOG_WRITE, tenant_id)
+        tenant = await self._tenant(tenant_id)
+        classes = sorted(set(data_classes))
+        if classes and not tenant.advisor_data_classes:
+            await self._require_capability(ADVISORS_CAPABILITY, "0.9", "allowing hosted advisors", "advisor policies")
+        try:
+            updated = TenantRecord.model_validate({**tenant.model_dump(), "advisor_data_classes": classes})
+        except ValidationError as exc:
+            raise ValidationFailed("unknown data class", errors=[str(e.get("msg")) for e in exc.errors()]) from exc
+        await self.store.put_tenant(updated)
+        await self.ctx.log(
+            "tenant",
+            tenant_id,
+            "advisor_policy",
+            p.actor,
+            before={"advisor_data_classes": tenant.advisor_data_classes},
+            after={"advisor_data_classes": classes},
+        )
+        await self.publish()
+        return updated
 
     async def _require_agent(self, tenant_id: str, agent_id: str) -> None:
         if await self.store.get_agent(tenant_id, agent_id) is None:

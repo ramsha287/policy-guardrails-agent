@@ -216,6 +216,16 @@ shadow or stale, with evidence, a relation graph, coverage, findings and MCP too
 pinning. The console has an Agent inventory and a Discovery connectors screen. See
 [docs/discovery.md](docs/discovery.md) and [docs/testing-discovery.md](docs/testing-discovery.md).
 
+**Phase 8, advisors:** optional, pluggable classifiers asked only when a request is already in the
+uncertain risk band. They answer one typed question (exfiltration, injection) from derived features
+— never the request's text — and can only tighten the decision: add capped risk or ask a person to
+confirm, never permit. A local in-process model, an HTTPS endpoint (for a vendor classifier or the
+Jev pilot) and a Bedrock LLM judge ship as providers; hosted ones follow a per-tenant data policy
+and are off by default. Run them in shadow mode and read the console's Advisors pilot before
+enforcing. See [docs/advisors.md](docs/advisors.md) and
+[docs/testing-advisors.md](docs/testing-advisors.md). The adaptive red-team harness that measures
+Gate 1 (exfiltration attack success) is run against a staging gateway, outside this repository.
+
 **Guardrails today:** `ai-gateway-pii` (the AI Gateway) and the OPA policy checks. The next
 guardrails, such as prompt injection, toxicity and secrets, are not built yet. See
 [docs/guardrails.md](docs/guardrails.md#guardrails-you-can-add).
