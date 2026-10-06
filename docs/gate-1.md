@@ -31,6 +31,26 @@ python -m app.bench --n 5000 --profile content --opa-url http://127.0.0.1:8181 -
 | `--concurrency N` | N requests in flight on one process: measures saturation, for sizing replicas |
 | `--fail-over-budget` | exit 1 when p99 is over `--budget-ms` (15), or when run without `--opa-url` |
 
+**Where to measure.** The budget is for the gateway next to OPA on Linux, as in CI and on the
+cluster. Two things on a laptop add network time that isn't the platform's:
+
+- **`localhost` on Windows** often resolves to IPv6 (`::1`) first and falls back, which costs about
+  40 ms per request. Always pass `127.0.0.1`.
+- **Docker Desktop (Windows, macOS)** runs containers in a VM, and every request from the host to a
+  published port is relayed. Against the Compose stack's OPA, a measured Windows laptop gave p50
+  54 ms with `localhost`, 13 ms with `127.0.0.1`, and 6 ms from inside the Docker network. OPA's own
+  evaluation was 0.17 ms, and the platform's overhead without OPA was 0.3 ms.
+
+On Docker Desktop, get the closest number by running the benchmark inside the gateway container,
+next to OPA. Treat it as indicative, not as the gate:
+
+```bash
+docker compose exec guardrail-gateway python -m app.bench --n 5000 --profile content --opa-url http://opa:8181
+```
+
+To see how much of the time is OPA's evaluation rather than the network, add `?metrics=true` to an
+OPA query and read `timer_rego_query_eval_ns`.
+
 What it reports: p50/p95/p99/max per stage and overall, the outcomes and risk bands (all `allow`
 and `low`, so you know it measured the fast path), `throughput_rps`, and `within_budget` (only
 with `--opa-url`; otherwise `null`, because it isn't a gate measurement).
@@ -89,9 +109,22 @@ version, the advisors), and re-run it whenever those change.
 The local advisor ships with hand-set starter weights. Before enforcing it, calibrate it on what
 your reviewers and users decided ([advisors.md](advisors.md#calibrating-the-local-advisor)):
 
+The two steps use **different services' CLIs**. `advisor-training-set` is a control-plane command
+(the gateway's `app.cli` doesn't have it), and calibration runs in the gateway:
+
 ```bash
-# control plane (needs AUDIT_DSN): features of requests advisors saw, labelled by people's decisions
-python -m app.cli advisor-training-set --out advisor-set.jsonl --days 30
-# gateway: fit, hold out 20%, report AUC, precision/recall and calibration next to today's weights
-python -m app.advise.calibrate --data advisor-set.jsonl --out local-v2.json --report calibration.json --min-auc 0.75
+# 1. control plane (needs AUDIT_DSN): features of requests advisors saw, labelled by people's decisions
+cd services/guardrail-control-plane
+python -m app.cli advisor-training-set --out ../../advisor-set.jsonl --days 30
+#    or on the Compose stack, where AUDIT_DSN is already set:
+#    docker compose exec guardrail-control-plane python -m app.cli advisor-training-set --out /tmp/advisor-set.jsonl --days 30
+#    docker compose cp guardrail-control-plane:/tmp/advisor-set.jsonl advisor-set.jsonl
+
+# 2. gateway: fit, hold out 20%, report AUC, precision/recall and calibration next to today's weights
+cd ../guardrail-gateway
+python -m app.advise.calibrate --data ../../advisor-set.jsonl --out local-v2.json --report calibration.json --min-auc 0.75
 ```
+
+The set only contains requests that an advisor answered **and a person then decided** (a reviewer
+in the review queue, or the user in a confirmation). On a fresh stack it has 0 rows: send some
+elevated-band requests and decide the held ones first.

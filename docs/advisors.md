@@ -145,10 +145,11 @@ codes, never text). People's decisions on the same requests become labels:
 Requests nobody decided are skipped: no label beats a guessed one.
 
 ```bash
-# control plane, needs AUDIT_DSN
-python -m app.cli advisor-training-set --out advisor-set.jsonl --days 30 [--tenant acme]
-# gateway
-python -m app.advise.calibrate --data advisor-set.jsonl --out local-v2.json \
+# 1. in services/guardrail-control-plane (its CLI, not the gateway's), needs AUDIT_DSN
+python -m app.cli advisor-training-set --out ../../advisor-set.jsonl --days 30 [--tenant acme]
+#    on the Compose stack: docker compose exec guardrail-control-plane python -m app.cli advisor-training-set --out /tmp/advisor-set.jsonl
+# 2. in services/guardrail-gateway
+python -m app.advise.calibrate --data ../../advisor-set.jsonl --out local-v2.json \
   --report calibration.json --min-auc 0.75
 ```
 

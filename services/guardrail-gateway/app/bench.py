@@ -1,6 +1,6 @@
 """Fast-path latency benchmark (Gate 1: the decision path adds under 15 ms at p99).
 
-    python -m app.bench [--n 5000] [--profile core|content] [--opa-url http://localhost:8181]
+    python -m app.bench [--n 5000] [--profile core|content] [--opa-url http://127.0.0.1:8181]
                         [--concurrency 1] [--budget-ms 15] [--report bench.json] [--fail-over-budget]
 
 Runs low-risk requests (a chat turn, a knowledge-base search, an internal read-only tool call)
@@ -265,7 +265,7 @@ def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(prog="python -m app.bench", description=(__doc__ or "").splitlines()[0])
     p.add_argument("--n", type=int, default=5000, help="measured requests (after a warm-up)")
     p.add_argument("--profile", choices=["core", "content"], default="content")
-    p.add_argument("--opa-url", default=None, help="e.g. http://localhost:8181 (otherwise in-process allow)")
+    p.add_argument("--opa-url", default=None, help="e.g. http://127.0.0.1:8181 (otherwise in-process allow)")
     p.add_argument("--concurrency", type=int, default=1)
     p.add_argument("--budget-ms", type=float, default=GATE_P99_MS)
     p.add_argument("--advisors", default='[{"name":"local","provider":"local","mode":"enforce"}]',
