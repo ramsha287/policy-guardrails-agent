@@ -14,6 +14,7 @@ class AgentInfo:
     agent_id: str
     base_trust_score: int
     allowed_tools: tuple[str, ...]
+    open_findings: tuple[str, ...] = ()  # inventory findings on this agent (e.g. unmanaged_agent)
 
 
 @dataclass(frozen=True)
@@ -37,6 +38,8 @@ class TenantCatalog:
     modifiers: dict[tuple[str, str], int] = field(default_factory=dict)
     # Data classes the tenant allows hosted advisors to see (app/advise). Empty = none (default).
     advisor_data_classes: frozenset[str] = frozenset()
+    # Tools whose definition changed after approval (open tool_definition_changed findings).
+    flagged_tools: frozenset[str] = frozenset()
 
     def agent(self, agent_id: str) -> AgentInfo | None:
         return self.agents.get(agent_id)

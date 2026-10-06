@@ -91,7 +91,9 @@ def main(argv: list[str] | None = None) -> int:
     e = sub.add_parser("evaluate", help="precision/recall against a labelled JSONL dataset")
     e.add_argument("--manifest", required=True)
     e.add_argument("--config", help="JSON file with the guardrail config")
-    e.add_argument("--dataset", required=True, help="JSONL: {id, stage, label: pii|clean, payload}")
+    e.add_argument(
+        "--dataset", required=True, help="JSONL: {id, stage, label: clean or pii|secret|injection|detect, payload}"
+    )
     e.add_argument("--min-precision", type=float, default=0.0)
     e.add_argument("--min-recall", type=float, default=0.0)
     e.add_argument("--min-cases", type=int, default=200, help="required cases per stage (requirement D)")

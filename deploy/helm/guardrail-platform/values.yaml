@@ -85,6 +85,11 @@ gateway:
   # policy (Tenants & keys -> Advisors). Credentials are names of ADVISOR_SECRET_* secret keys.
   advisors: ""                      # "" = no advisors. Example: '[{"name":"local","provider":"local","mode":"shadow"}]'
   advisorSecretKeys: []             # ADVISOR_SECRET_* keys in the platform Secret (http advisor auth_env)
+  # content-moderation guardrail: an OpenAI-compatible /moderations endpoint. The key comes from the
+  # platform Secret (MODERATION_API_KEY); assignments can't change either, so a key can't be redirected.
+  moderation:
+    enabled: false
+    baseUrl: ""                     # "" = https://api.openai.com/v1; or a self-hosted, OpenAI-compatible endpoint
   # Verification engine: what a `verify` outcome may use before falling back to human review.
   verification:
     enabled: true

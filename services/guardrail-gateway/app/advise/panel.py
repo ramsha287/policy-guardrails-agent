@@ -24,7 +24,7 @@ import asyncio
 import logging
 import time
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
@@ -117,19 +117,25 @@ class Advisory:
     shadow_points: int = 0  # what shadow advisors would have added (same caps)
     shadow_verify: bool = False
     records: tuple[AdvisorRecord, ...] = field(default_factory=tuple)
+    # The question's features (derived only: counts, shapes, codes - never text). Audited so
+    # reviewers' decisions can later label them to calibrate advisors (app/advise/calibrate.py).
+    features: Features | None = None
 
     @property
     def ran(self) -> bool:
         return bool(self.records)
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        out: dict[str, Any] = {
             "points": self.points,
             "verify": self.verify,
             "shadow_points": self.shadow_points,
             "shadow_verify": self.shadow_verify,
             "answers": [r.to_dict() for r in self.records],
         }
+        if self.features is not None:
+            out["features"] = self.features.model_dump(mode="json")
+        return out
 
 
 SENSITIVE_LABELS = {"holds:PII": "PII", "holds:CONFIDENTIAL": "CONFIDENTIAL"}
@@ -185,7 +191,7 @@ class AdvisorPanel:
         records = tuple(answered + skipped)
         for r in records:
             ADVISOR_ANSWERS.labels(r.advisor, r.mode, r.status, r.label or "none").inc()
-        return combine(records, self.config)
+        return replace(combine(records, self.config), features=features)
 
     async def _ask(self, spec: AdvisorSpec, advisor: Advisor, q: Question) -> AdvisorRecord:
         started = self._clock()

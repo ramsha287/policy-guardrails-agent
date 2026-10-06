@@ -30,8 +30,29 @@ with status 1 if any stage misses a threshold, has fewer than `--min-cases` case
 
 A case counts as **detected** when the guardrail returns MODIFY or BLOCK, or reports findings.
 
+## The secrets set
+
+`generate_secrets_dataset.py` builds a labelled set for the `secrets` guardrail: 220 cases per
+stage, half with one credential (AWS, GitHub, Slack, OpenAI, Anthropic, Stripe, Google, JWTs,
+private keys, database URLs, password assignments) and half clean look-alikes (UUIDs, git SHAs,
+checksums, placeholders, masked values). It is generated on demand and **not committed**, because
+it is full of credential-shaped strings that secret scanners rightly flag:
+
+```bash
+python eval/generate_secrets_dataset.py     # -> eval/datasets/secrets_v1.jsonl (git-ignored)
+cd services/guardrail-gateway
+PYTHONPATH=. guardrail evaluate --manifest app/plugins/secrets/guardrail.yaml \
+  --dataset ../../eval/datasets/secrets_v1.jsonl --min-precision 0.95 --min-recall 0.95
+```
+
+The gateway test suite builds and checks it too (`test_secrets_meets_requirement_d_on_the_generated_set`).
+
+There is no labelled set for `prompt-injection` in this repository: measure it in shadow mode on
+your own traffic, or on a public benchmark your security team chooses.
+
 ## Adding a dataset for a new guardrail
 
 Use the same JSON Lines format:
-`{"id", "stage", "label": "pii" | "clean", "payload": {...}, "entities": [...]}`. The payload is
+`{"id", "stage", "label": "clean" | "pii" | "secret" | "injection" | "detect", "payload": {...}, "entities": [...]}`
+(any label other than `clean` means "should be detected"). The payload is
 exactly what the gateway receives for that stage. Commit the generator script with the data.

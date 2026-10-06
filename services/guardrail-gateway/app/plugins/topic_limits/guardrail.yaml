@@ -1,0 +1,39 @@
+# Keep an agent to what it is for: denied topics and (optionally) the topics it may handle.
+id: topic-limits
+version: 1.0.0
+kind: local
+description: >
+  Blocks or escalates messages about denied topics, and (when allowed_topics is set) escalates
+  messages outside the agent's purpose. Topics are keywords and/or regular expressions set per
+  assignment, so each tenant or agent gets its own limits.
+owner: ai-security
+data_handling: >
+  Runs in the gateway process. Sends nothing anywhere and stores nothing. Findings name the
+  matched topic and location, never the text.
+stages: [input, output]
+decisions_emitted: [allow, escalate, block]
+failure_mode: fail_open
+latency_budget_ms: 10
+capabilities:
+  needs_raw_payload: true
+  parallel_safe: true
+entrypoint: app.plugins.topic_limits.guardrail:TopicLimitsGuardrail
+config_schema:
+  type: object
+  additionalProperties: false
+  $defs:
+    topic:
+      type: object
+      additionalProperties: false
+      required: [name]
+      properties:
+        name: {type: string, pattern: "^[a-z0-9][a-z0-9_-]{0,63}$"}
+        keywords: {type: array, items: {type: string, maxLength: 100}, maxItems: 500}
+        patterns: {type: array, items: {type: string, maxLength: 300}, maxItems: 50}
+  properties:
+    denied_topics: {type: array, items: {$ref: "#/$defs/topic"}, maxItems: 100}
+    allowed_topics: {type: array, items: {$ref: "#/$defs/topic"}, maxItems: 100}
+    on_denied: {enum: [block, escalate], default: block}
+    on_out_of_scope: {enum: [block, escalate, allow], default: escalate}
+    min_words_for_scope: {type: integer, minimum: 1, maximum: 100, default: 4}
+    scan_roles: {type: array, items: {enum: [system, user, assistant, tool]}, default: [user]}

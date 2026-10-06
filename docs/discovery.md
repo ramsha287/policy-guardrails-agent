@@ -305,13 +305,36 @@ shadow-agent response ladder).
 Data: schema `inventory` (control-plane migration `0004`): `connectors`, `sync_runs`,
 `observations` (pruned after 90 days), `entities`, `edges`, `findings`.
 
+## Findings feed the gateway's risk
+
+Since 0.10 the control plane publishes two things from the inventory in the catalog the gateways
+already poll, and the gateway turns them into capped risk signals:
+
+| Catalog field | From | Gateway signal |
+| --- | --- | --- |
+| `agents[].open_findings` | open `unmanaged_agent` findings on a registered agent (it also reaches models without the gateway) | `AGENT_FINDING` (+20) on that agent's requests |
+| `flagged_tools` | open `tool_definition_changed` findings, as `<server>/<tool>` (an MCP tool changed after it was approved) | `TOOL_DEFINITION_CHANGED` (+25) on a call to that tool |
+
+A bare tool name (`lookup_customer`) matches, since the call doesn't say which server it means. A
+qualified name (`crm__lookup_customer`, `mcp__crm__lookup_customer`, `crm/lookup_customer`,
+`crm:lookup_customer`) matches only when its server part is that server, so a changed `query` on
+one MCP server doesn't raise the risk of every `catalog.query` in the tenant. The catalog is republished
+after every run, reconcile and finding change; accepting or resolving the finding removes the
+signal within a catalog poll. Weights are `agent_finding` and `tool_definition_changed` in
+`RISK_CONFIG_JSON`.
+
+Older gateways reject unknown catalog fields, so the control plane leaves both out while any
+gateway heard from in the last 15 minutes doesn't report the `inventory_risk_v1` capability
+(0.10+). A gateway joining, coming back or upgrading triggers a republish from its heartbeat, so
+the fields disappear and reappear without waiting for another change.
+
 ## Known limits
 
 - Sources so far: our gateway, Kubernetes, DNS logs, OpenAI, Bedrock/AgentCore, MCP. CloudTrail
   invocation logs, Azure (Foundry, Entra Agent ID), Google Cloud and code/SBOM scanning are next.
-- The inventory doesn't feed the gateway's risk yet: a registered-unmanaged agent's finding is
-  not a risk signal on its requests. That, and denying egress to model providers for shadow
-  workloads (the response ladder's tier-1 step), come with the response engine.
+- Findings raise risk on the gateway ([below](#findings-feed-the-gateways-risk)) but nothing acts
+  on a shadow workload outside the gateway yet: denying its egress to model providers (the
+  response ladder's tier-1 step) comes with the response engine.
 - DNS lookups are a proxy for traffic, not a count of requests; resolvers cache, and traffic
   through an unknown proxy shows the proxy, not the agent.
 - Linking by name (OpenAI service accounts) and by label or tag trusts whoever sets them; check

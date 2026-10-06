@@ -42,7 +42,8 @@ look like an internal domain). So content the agent fetched can never become an 
 advisor that judges acting on that content.
 
 The agent, in turn, never sees advisor output: the response carries one aggregated `ADVISOR_RISK`
-code, never which advisor answered or why. Per-advisor answers go only to the audit record.
+code, never which advisor answered or why. Per-advisor answers go only to the audit record, with
+the question's features (from 0.10), so people's later decisions can label them for calibration.
 
 ## Providers
 
@@ -53,9 +54,10 @@ code, never which advisor answered or why. Per-advisor answers go only to the au
 | `bedrock` | Amazon Bedrock Converse, in your account | yes | an LLM judge (1–10 s: shadow, not inline enforce) |
 
 **local** ships with a small weights file (`app/advise/models/local-v1.json`). The weights in this
-release are hand-set starting points, not trained: run `local` in **shadow** mode and calibrate it
-on your own labelled traffic before enforcing. The feature vector and model format are in
-`app/advise/providers/local.py`; retrain by replacing the JSON file.
+release are hand-set starting points, not trained: run `local` in **shadow** mode and
+[calibrate it](#calibrating-the-local-advisor) on your own decisions before enforcing. The feature
+vector and model format are in `app/advise/providers/local.py`; point `options.weights_path` at a
+new file to use it.
 
 **http** posts `{"schema": "guardrail.advisor.v1", "question": <question>}` and expects the typed
 answer. Redirects are not followed; plain `http://` is refused unless `allow_http` is set (labs).
@@ -128,6 +130,38 @@ of the requests it flagged, how many the deterministic path stopped anyway. The 
 attention before enforcing are the ones an advisor flagged that were *released*: its
 `flagged_released` count. An advisor is worth enforcing only when it beats the deterministic
 baseline there without raising the hold rate above what reviewers can handle.
+
+## Calibrating the local advisor
+
+The gateway audits each advisor question's features (`risk.advisors.features`: counts, shapes and
+codes, never text). People's decisions on the same requests become labels:
+
+| Label | When |
+| --- | --- |
+| 1 | a reviewer rejected the held request, or the user rejected the confirmation (`USER_REJECTED`) |
+| 0 | a reviewer approved it, or the user confirmed it (`EVIDENCE_USER_CONFIRMATION`) |
+| weak 0 | released without a person deciding (including a bare `VERIFIED`, which can mean machine evidence such as a SQL dry run); only with `--include-released`, and the calibrator leaves these out unless `--include-weak` |
+
+Requests nobody decided are skipped: no label beats a guessed one.
+
+```bash
+# control plane, needs AUDIT_DSN
+python -m app.cli advisor-training-set --out advisor-set.jsonl --days 30 [--tenant acme]
+# gateway
+python -m app.advise.calibrate --data advisor-set.jsonl --out local-v2.json \
+  --report calibration.json --min-auc 0.75
+```
+
+The calibrator fits an L2-regularised logistic model (Newton's method, so it converges whatever
+the feature scale) on exactly the features the gateway scores, holds out 20% of
+requests (a deterministic split by request id), and reports for the held-out part, next to the
+weights you run today: AUC, precision and recall at the `suspicious` and `malicious` thresholds,
+Brier score and expected calibration error with a per-bin table. It refuses to train on fewer than
+50 rows or 10 of each label, and `--min-auc` makes it exit 1 below a floor (for a scheduled job).
+
+Reviewer labels say "this should have been stopped", not which question was at stake, so both
+questions get the same model unless rows carry per-question `labels`. Run the new weights in
+shadow first (`options.weights_path`), compare in the Advisors page, then enforce.
 
 ## Safety properties
 

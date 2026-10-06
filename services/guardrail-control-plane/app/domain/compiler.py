@@ -113,14 +113,24 @@ def compile_snapshot(
     return result
 
 
+@dataclass
+class InventoryFlags:
+    """What the inventory tells gateways about one tenant (see CatalogService._inventory_flags)."""
+
+    agent_findings: dict[str, list[str]] = field(default_factory=dict)  # agent_id -> open finding kinds
+    flagged_tools: list[str] = field(default_factory=list)  # tools with an unapproved definition change
+
+
 def build_catalog(
     tenants: Iterable[TenantRecord],
     keys: Iterable[ApiKeyRecord],
     agents: Iterable[AgentRecord],
     actions: Iterable[ActionRecord],
     modifiers: Iterable[ModifierRecord],
+    inventory: dict[str, InventoryFlags] | None = None,
 ) -> CatalogDoc:
     now = utcnow()
+    inventory = inventory or {}
     by_tenant: dict[str, CatalogTenant] = {
         t.id: CatalogTenant(id=t.id, name=t.name, status=t.status, advisor_data_classes=t.advisor_data_classes)
         for t in sorted(tenants, key=lambda t: t.id)
@@ -141,8 +151,14 @@ def build_catalog(
             )
     for a in sorted(agents, key=lambda a: (a.tenant_id, a.agent_id)):
         if a.tenant_id in by_tenant:
+            flags = inventory.get(a.tenant_id)
             by_tenant[a.tenant_id].agents.append(
-                CatalogAgent(agent_id=a.agent_id, base_trust_score=a.base_trust_score, allowed_tools=a.allowed_tools)
+                CatalogAgent(
+                    agent_id=a.agent_id,
+                    base_trust_score=a.base_trust_score,
+                    allowed_tools=a.allowed_tools,
+                    open_findings=sorted(set(flags.agent_findings.get(a.agent_id, []))) if flags else [],
+                )
             )
     for r in sorted(actions, key=lambda r: (r.tenant_id, r.action, r.resource_pattern)):
         if r.tenant_id in by_tenant:
@@ -152,6 +168,9 @@ def build_catalog(
     for m in sorted(modifiers, key=lambda m: (m.tenant_id, m.kind, m.value)):
         if m.tenant_id in by_tenant:
             by_tenant[m.tenant_id].modifiers.append(CatalogModifier(kind=m.kind, value=m.value, delta=m.delta))
+    for tid, flags in inventory.items():
+        if tid in by_tenant and flags.flagged_tools:
+            by_tenant[tid].flagged_tools = sorted(set(flags.flagged_tools))
     doc = CatalogDoc(version="pending", tenants=list(by_tenant.values()))
     digest = content_hash(doc, {"version", "published_at"})
     return doc.model_copy(update={"version": catalog_version(now, digest)})

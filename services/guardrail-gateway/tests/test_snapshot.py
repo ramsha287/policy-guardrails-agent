@@ -51,15 +51,23 @@ def registry():
 
 
 async def test_discovers_builtin_plugins(registry):
-    assert {"ai-gateway-pii@1.0.0", "ai-gateway-pii@1.1.0", "noop@1.0.0"} <= set(registry.manifests)
+    assert {
+        "ai-gateway-pii@1.0.0", "ai-gateway-pii@1.1.0", "noop@1.0.0",
+        "secrets@1.0.0", "prompt-injection@1.0.0", "topic-limits@1.0.0", "content-moderation@1.0.0",
+    } <= set(registry.manifests)  # fmt: skip
 
 
 async def test_compile_dev_snapshot(registry, monkeypatch):
     monkeypatch.setenv("AI_GATEWAY_PROJECT_ID", PROJECT)
     compiled = await registry.compile_file(SNAP_DIR / "dev.json", "dev")
     ids = [b.manifest.id for b in compiled.resolve("demo", "research-agent", Stage.INPUT)]
-    assert ids == ["ai-gateway-pii", "noop"]
-    assert [b.manifest.id for b in compiled.resolve("demo", "a", Stage.RETRIEVAL)] == ["ai-gateway-pii", "noop"]
+    assert ids == ["ai-gateway-pii", "secrets", "prompt-injection", "noop"]
+    retrieval = [b.manifest.id for b in compiled.resolve("demo", "a", Stage.RETRIEVAL)]
+    assert retrieval == ["ai-gateway-pii", "secrets", "prompt-injection", "noop"]
+    output = [b.manifest.id for b in compiled.resolve("demo", "a", Stage.OUTPUT)]
+    assert output == ["ai-gateway-pii", "secrets", "noop"]  # prompt-injection doesn't cover output
+    # the phase 9 guardrails arrive in shadow: they are measured before they change anything
+    assert {b.assignment.mode for b in compiled.bound if b.manifest.id in ("secrets", "prompt-injection")} == {"shadow"}
     assert all(b.manifest.version == "1.1.0" for b in compiled.bound if b.manifest.id == "ai-gateway-pii")
 
 

@@ -89,6 +89,15 @@ const state = {
     { guardrail_id: "ai-gateway-pii", version: "1.1.0", manifest: PII, status: "validated", source: "gateway", conformance_report: { passed: true }, created_at: ago(60 * 24 * 7) },
     { guardrail_id: "ai-gateway-pii", version: "1.0.0", manifest: { ...PII, version: "1.0.0", stages: ["input", "output"] }, status: "deprecated", source: "gateway", conformance_report: null, created_at: ago(60 * 24 * 40) },
     { guardrail_id: "noop", version: "1.0.0", manifest: NOOP, status: "validated", source: "gateway", conformance_report: null, created_at: ago(60 * 24 * 40) },
+    ...[
+      ["secrets", "Credentials (API keys, tokens, private keys, passwords) in any stage.", ["input", "retrieval", "tool", "output"], ["allow", "modify", "block"]],
+      ["prompt-injection", "Instructions hidden in user input, retrieved documents and tool results.", ["input", "retrieval", "tool"], ["allow", "modify", "escalate", "block"]],
+      ["topic-limits", "Denied topics and requests outside what the agent is for.", ["input", "output"], ["allow", "escalate", "block"]],
+      ["content-moderation", "Harmful content via an OpenAI-compatible moderation endpoint.", ["input", "output"], ["allow", "escalate", "block"]],
+    ].map(([id, description, stages, decisions_emitted]) => ({
+      guardrail_id: id, version: "1.0.0", status: "validated", source: "gateway", conformance_report: { passed: true }, created_at: ago(60 * 24),
+      manifest: { ...NOOP, id, description, stages, decisions_emitted, kind: id === "content-moderation" ? "remote" : "local" },
+    })),
   ],
   assignments: {},
   snapshots: {},

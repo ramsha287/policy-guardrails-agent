@@ -178,6 +178,10 @@ services:
       # unchanged and its answers are recorded with each decision (Console -> Advisors). Set to ""
       # to turn it off, or add an `http`/`bedrock` advisor; see docs/advisors.md.
       ADVISORS_JSON: ${ADVISORS_JSON:-[{"name":"local","provider":"local","mode":"shadow"}]}
+      # content-moderation guardrail (assign it in the console to use it): an OpenAI-compatible
+      # /moderations endpoint and its key. Empty base URL = https://api.openai.com/v1.
+      MODERATION_BASE_URL: ${MODERATION_BASE_URL:-}
+      MODERATION_API_KEY: ${MODERATION_API_KEY:-}
       # Dev only (refused unless GATEWAY_ENV=dev): lets `python -m app.cli dev-user-token`
       # mint user tokens for the user-confirmation flow. Production uses VERIFY_OIDC_*.
       VERIFY_DEV_SECRET: ${VERIFY_DEV_SECRET:-dev-only-verify-secret-0123456789abcdef}

@@ -139,6 +139,12 @@ spec:
             - name: ADVISORS_JSON
               value: {{ if kindIs "string" $g.advisors }}{{ $g.advisors | quote }}{{ else }}{{ $g.advisors | toJson | quote }}{{ end }}
             {{- end }}
+            {{- if ($g.moderation | default dict).enabled }}
+            {{- with $g.moderation.baseUrl }}
+            - {name: MODERATION_BASE_URL, value: {{ . | quote }}}
+            {{- end }}
+            {{- include "gp.secretEnv" (dict "root" $ "name" "MODERATION_API_KEY" "optional" true) | nindent 12 }}
+            {{- end }}
             {{- range $g.advisorSecretKeys | default list }}
             {{- if not (hasPrefix "ADVISOR_SECRET_" .) }}
             {{- fail (printf "gateway.advisorSecretKeys: %s must start with ADVISOR_SECRET_" .) }}

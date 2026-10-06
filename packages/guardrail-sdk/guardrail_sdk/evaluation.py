@@ -3,6 +3,9 @@
 Dataset: JSON Lines, one case per line:
     {"id": "input-0001", "stage": "input", "label": "pii" | "clean", "payload": {...}, "entities": ["EMAIL_ADDRESS"]}
 
+`label` is "clean" for a case the guardrail should leave alone, and any of the positive labels
+("pii", "secret", "injection", "detect") for one it should catch.
+
 A case counts as *detected* when the guardrail returns MODIFY or BLOCK, or reports findings.
 Metrics are computed per stage and overall; latency p50/p95 is measured per call.
 
@@ -23,12 +26,14 @@ from typing import Any
 from .guardrail import Guardrail
 from .models import Decision, Payload, SecurityContext, Stage
 
+POSITIVE_LABELS = ("pii", "secret", "injection", "detect")
+
 
 @dataclass
 class Case:
     id: str
     stage: Stage
-    label: bool  # True = contains PII (should be detected)
+    label: bool  # True = should be detected (PII, a secret, an injection ...)
     payload: Payload
     entities: list[str] = field(default_factory=list)
 
@@ -103,13 +108,13 @@ def load_dataset(path: str | Path) -> list[Case]:
             continue
         raw = json.loads(line)
         stage = Stage(raw["stage"])
-        if raw["label"] not in ("pii", "clean"):
-            raise ValueError(f"line {n}: label must be 'pii' or 'clean'")
+        if raw["label"] not in POSITIVE_LABELS and raw["label"] != "clean":
+            raise ValueError(f"line {n}: label must be 'clean' or one of {', '.join(POSITIVE_LABELS)}")
         cases.append(
             Case(
                 id=raw.get("id") or f"case-{n}",
                 stage=stage,
-                label=raw["label"] == "pii",
+                label=raw["label"] in POSITIVE_LABELS,
                 payload=Payload.model_validate({**raw["payload"], "stage": stage}),
                 entities=list(raw.get("entities") or []),
             )

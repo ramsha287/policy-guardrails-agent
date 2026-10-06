@@ -42,6 +42,7 @@ GATEWAY_CAPABILITIES = (
     "authzen_v1",
     "outbox_v1",
     "advisors_v1",
+    "inventory_risk_v1",
 )
 
 SNAPSHOT_CHANNEL = "guardrail:snapshot.published"
@@ -83,10 +84,14 @@ class CatalogHolder:
                 continue  # a suspended tenant's keys stop working and nothing is scored for it
             cat = TenantCatalog(
                 agents={
-                    a.agent_id: AgentInfo(a.agent_id, a.base_trust_score, tuple(a.allowed_tools)) for a in t.agents
+                    a.agent_id: AgentInfo(
+                        a.agent_id, a.base_trust_score, tuple(a.allowed_tools), tuple(a.open_findings)
+                    )
+                    for a in t.agents
                 },
                 modifiers={(m.kind, m.value): m.delta for m in t.modifiers},
                 advisor_data_classes=frozenset(t.advisor_data_classes),
+                flagged_tools=frozenset(t.flagged_tools),
             )
             for r in t.actions:
                 cat.actions.setdefault(r.action, []).append(ActionRule(r.action, r.resource_pattern, r.base_risk_score))

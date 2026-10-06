@@ -23,3 +23,6 @@ deploy/secrets/**/secrets.yaml
 
 # discovery demo logs (python examples/discovery/make_dns_log.py)
 examples/discovery/logs/**/*.log
+
+# Generated on demand: full of credential-shaped strings (python eval/generate_secrets_dataset.py)
+eval/datasets/secrets_v1.jsonl

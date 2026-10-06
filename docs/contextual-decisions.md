@@ -116,6 +116,9 @@ classification and environment modifiers).
 | `UNKNOWN_TOOL` | 15 | The parser couldn't classify the tool call |
 | `MULTIPLE_STATEMENTS` | 10 | More than one SQL statement |
 | `LOW_CONFIDENCE` | up to 20 | Context was missing (store down, no session, unparsed action, no baseline) |
+| `AGENT_FINDING` | 20 | The agent has an open inventory finding, e.g. `unmanaged_agent` (it also reaches models directly) ([discovery](discovery.md#findings-feed-the-gateways-risk)) |
+| `TOOL_DEFINITION_CHANGED` | 25 | A tool call to an MCP tool whose definition changed after it was approved |
+| `ADVISOR_RISK` | up to 20 | Enforcing [advisors](advisors.md) in the uncertain band (one aggregated code) |
 
 **Bands** move with the agent's current trust T: low < 30 + 0.2·T, elevated < min(80, 55 + 0.2·T),
 high < 80, critical ≥ 80.

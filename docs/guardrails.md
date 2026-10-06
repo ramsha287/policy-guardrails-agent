@@ -16,8 +16,12 @@ use today: **`ai-gateway-pii`, backed by the AI Gateway**.
 | --- | --- | --- | --- |
 | **[`ai-gateway-pii`](#ai-gateway-pii-the-ai-gateway)** | Personal data (emails, names, phone numbers, SSNs, card numbers, national IDs, your own patterns), using the **AI Gateway** (Presidio) | input, retrieval, tool, output | **Available now.** On by default |
 | [Policy checks (OPA)](#policy-checks-opa) | Whether the agent may do this at all: trust and risk scores, allowed tools, delegation depth, required guardrails | every stage | **Available now.** Always on, part of the gateway |
+| **[`secrets`](#secrets-credentials-in-any-stage)** | API keys, tokens, private keys and passwords, by their published formats | input, retrieval, tool, output | **Available.** Shadow in dev; enforce when ready |
+| **[`prompt-injection`](#prompt-injection-instructions-hidden-in-content)** | Instructions hidden in user input, retrieved documents and tool results (heuristic) | input, retrieval, tool | **Available.** Shadow in dev; measure before enforcing |
+| **[`topic-limits`](#topic-limits-what-the-agent-is-for)** | Denied topics, and requests outside what the agent is for | input, output | **Available.** Needs your topic lists |
+| **[`content-moderation`](#content-moderation-harmful-content)** | Harassment, hate, violence, self-harm, sexual content, via an OpenAI-compatible moderation endpoint | input, output | **Available.** Needs an endpoint and key |
 | [`noop`](#noop-the-template) | Nothing (always allows) | every stage | Available. A template and engine smoke test, not a real control |
-| [Prompt injection, toxicity, secrets, topics, …](#guardrails-you-can-add) | Other kinds of content | your choice | **Not built yet.** The platform is ready for them |
+| [Grounding, tool argument rules, step limits, …](#guardrails-you-can-add) | Other checks | your choice | **Not built yet.** The platform is ready for them |
 
 > **Today, the AI Gateway is the platform's content guardrail.** Every request marked `PII` or
 > `CONFIDENTIAL` must pass through `ai-gateway-pii` on input, retrieval, tool and output, or it's
@@ -202,6 +206,95 @@ The starter policy (`policies/guardrails/authz.rego`):
 Trust and risk scores come from **Tenants & keys** in the console. How they're calculated:
 [reference.md](reference.md#scoring-separate-agent-and-action-scores).
 
+## `secrets`: credentials in any stage
+
+**Status: available (phase 9).** In process, deterministic, no network.
+
+Finds credentials by their published formats: AWS access and secret keys, GitHub, Slack, OpenAI,
+Anthropic, Stripe and Google keys, JWTs, PEM private keys, database URLs with a password, and this
+platform's own `gk_`/`cpk_` keys. It also finds `password=...`/`api_key: ...`-style assignments
+whose value looks random (Shannon entropy at least `min_entropy`), and skips placeholders such as
+`${API_KEY}`, `<your-token>`, `********` or `changeme`.
+
+| Setting | Meaning | Default |
+| --- | --- | --- |
+| `on_detect` | `modify` redacts each secret as `<SECRET:TYPE>`; `block` blocks the request | `modify` |
+| `block_types` | Types that always block, whatever `on_detect` says | `[PRIVATE_KEY]` |
+| `ignore_types` | Detectors to switch off (for example `JWT` where tokens are passed on purpose) | none |
+| `min_entropy` | Bits per character for assignment values | `3.0` |
+| `scan_tool_arguments`, `scan_tool_result` | Which side of a tool call to check | both |
+
+Findings carry the type, offsets and location, never the value. A payload too large to scan in
+full is blocked (it's `fail_closed`: a secret past the cut can't be vouched for). It runs in
+**shadow** in dev by default. Quality: `python eval/generate_secrets_dataset.py` builds a labelled set (220 cases per
+stage, half with look-alikes such as UUIDs, git SHAs, checksums and placeholders); the set isn't
+committed because it is full of credential-shaped strings. On that synthetic set precision and
+recall are 1.0, which says the formats are covered, not how it does on your traffic.
+
+## `prompt-injection`: instructions hidden in content
+
+**Status: available (phase 9).** In process, heuristic, no network.
+
+Scores text for the common shapes of injected instructions: attempts to override earlier
+instructions, fake system turns and chat-template tokens, persona switches, directives to send
+data to an address, markdown image beacons, requests to hide something from the user, and hidden
+Unicode (tag characters, zero-width and bidi runs). Each text gets a score from the categories it
+matches; the request's score is its highest. It checks user input, retrieved chunks and tool
+**results** (not the agent's own tool arguments).
+
+| Score | Retrieval | Input, tool results |
+| --- | --- | --- |
+| below `escalate_at` (0.5) | allow (weak signals go in metadata) | allow |
+| `escalate_at` to `block_at` | the chunk is **dropped** (MODIFY), or `escalate`/`block` per `retrieval_action` | **escalate** |
+| at or above `block_at` (0.85) | **block** | **block** |
+
+Add your own patterns with `extra_patterns` (`name`, `pattern`, `weight`). A heuristic catches common,
+unsophisticated injections and misses paraphrases, so don't rely on it alone: the contextual
+decisions (taint labels after untrusted content, `SENSITIVE_THEN_EXTERNAL`) don't depend on
+spotting the injection at all. It runs in **shadow** in dev by default. Measure it on your own
+traffic in shadow mode, or on a public benchmark your security team chooses, before enforcing;
+the repository ships unit and conformance tests for it but no labelled injection set.
+
+## `topic-limits`: what the agent is for
+
+**Status: available (phase 9).** In process, deterministic. Needs configuration.
+
+Two optional lists per assignment (so per tenant or per agent). A topic is a name plus keywords
+(whole words or phrases) and/or regular expressions.
+
+```json
+{"denied_topics": [{"name": "legal-advice", "keywords": ["lawsuit", "sue", "legal advice"]}],
+ "allowed_topics": [{"name": "billing", "keywords": ["invoice", "refund", "payment"]}],
+ "on_denied": "block", "on_out_of_scope": "escalate", "min_words_for_scope": 4}
+```
+
+A message that matches a denied topic is blocked (or escalated). When `allowed_topics` is set, a
+message of at least `min_words_for_scope` words that matches none of them is out of scope
+(escalated by default). Findings name the topic, never the text.
+
+Patterns come from config, and Python's regular expressions have no time limit, so they follow
+simple rules (also for `prompt-injection`'s `extra_patterns`): no unbounded repetition of a group
+(`(ab)+` is refused; repeat a character or class instead, `[a-z]+`), no backreferences, named
+groups or inline flags, at most 300 characters; and they only look at the first 16,384 characters
+of each text. Keywords have no such limits.
+
+## `content-moderation`: harmful content
+
+**Status: available (phase 9).** Remote. Needs an endpoint and key.
+
+Sends the user's and assistant's messages to an OpenAI-compatible `/moderations` endpoint:
+OpenAI's moderation API, or a self-hosted model behind the same API when the text must stay in
+your network. Categories in `block_categories` block (default `sexual/minors`); other flagged
+categories escalate (`on_flagged`). `thresholds` let you flag on scores instead of the endpoint's
+own booleans.
+
+The endpoint and key are set by the operator, never by assignment config, so an editor can't
+point the key at another host: `MODERATION_BASE_URL` (default `https://api.openai.com/v1`) and
+`MODERATION_API_KEY` (Helm: `gateway.moderation`). Long texts are split into 32,000-character
+pieces and every piece is moderated. It is `fail_closed` by default (an unreachable endpoint, or a
+payload too large to moderate in full, blocks); override per assignment if an outage of the
+moderation service shouldn't stop traffic.
+
 ## `noop`: the template
 
 **Status: available, but it isn't a safety control.**
@@ -211,16 +304,13 @@ guardrails, and it is the starting point for writing your own (`services/guardra
 
 ## Guardrails you can add
 
-**None of these are built yet.** The platform is designed for them: each would be a new plugin
-with its own manifest, rolled out in shadow mode first, without changes to the gateway, engine or
-policies.
+**These aren't built yet.** The platform is designed for them: each would be a new plugin with
+its own manifest, rolled out in shadow mode first, without changes to the gateway, engine or
+policies. (Secrets, prompt injection, topic limits and moderation were added in phase 9, above.)
 
 | Guardrail | What it would check | Likely stages | Kind |
 | --- | --- | --- | --- |
-| Prompt injection / jailbreak | Instructions hidden in prompts or retrieved documents | input, retrieval | `model` or `local` |
-| Toxicity and harmful content | Abusive, hateful or unsafe text | input, output | `model` |
-| Secrets and credentials | API keys, passwords, private keys in text or tool calls | input, tool, output | `local` |
-| Topic and scope limits | Requests outside what the agent is for | input | `local` or `model` |
+| Model-based prompt injection | A classifier model alongside the heuristic | input, retrieval, tool | `model` |
 | Grounding | Answers not supported by the retrieved sources | output | `model` |
 | Tool argument rules | Allowed domains, amount limits, read-only checks on tool calls | tool | `local` |
 | Agent step and cost limits | Runaway loops, too many steps or tokens per run | agent | `local` |

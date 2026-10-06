@@ -73,6 +73,35 @@ jobs:
         working-directory: services/guardrail-gateway
         run: mypy app
 
+  latency:
+    # Gate 1: the decision path adds under 15 ms at p99 (docs/gate-1.md). Measured against a real
+    # OPA server. Report-only: shared runners are noisy; the gate is measured on your own hardware.
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - uses: open-policy-agent/setup-opa@v2
+        with:
+          version: 1.4.2
+      - run: pip install -e packages/guardrail-sdk -r services/guardrail-gateway/requirements.txt
+      - name: Fast-path latency (sequential, then 8 in flight)
+        working-directory: services/guardrail-gateway
+        run: |
+          opa run --server --skip-version-check --addr 127.0.0.1:8181 ../../policies/guardrails/authz.rego &
+          timeout 30 sh -c 'until curl -sf 127.0.0.1:8181/health >/dev/null; do sleep 1; done'
+          python -m app.bench --n 5000 --profile content --opa-url http://127.0.0.1:8181 \
+            --report ../../latency-report.json --fail-over-budget
+          python -m app.bench --n 5000 --profile content --opa-url http://127.0.0.1:8181 --concurrency 8 \
+            --report ../../latency-report-c8.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: latency-report
+          path: latency-report*.json
+
   control-plane:
     runs-on: ubuntu-latest
     services:

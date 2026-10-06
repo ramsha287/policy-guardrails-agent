@@ -1,0 +1,42 @@
+# Instructions hidden in user input, retrieved documents and tool results. In-process heuristic.
+id: prompt-injection
+version: 1.0.0
+kind: local
+description: >
+  Scores text for the common shapes of injected instructions (overriding previous instructions,
+  fake system turns and chat-template tokens, persona switches, "send this to <url>" directives,
+  markdown image beacons, concealment requests, hidden Unicode). Drops poisoned retrieved chunks,
+  escalates suspicious input and tool results, blocks above a high threshold. Roll out in shadow.
+owner: ai-security
+data_handling: >
+  Runs in the gateway process. Sends nothing anywhere and stores nothing. Findings carry a score
+  and a location; metadata lists the matched categories, never the text.
+stages: [input, retrieval, tool]
+decisions_emitted: [allow, modify, escalate, block]
+failure_mode: fail_open
+latency_budget_ms: 20
+capabilities:
+  emits_modify: true
+  needs_raw_payload: true
+  parallel_safe: false
+  max_payload_kb: 1024
+entrypoint: app.plugins.prompt_injection.guardrail:PromptInjectionGuardrail
+config_schema:
+  type: object
+  additionalProperties: false
+  properties:
+    escalate_at: {type: number, exclusiveMinimum: 0, maximum: 1, default: 0.5}
+    block_at: {type: number, exclusiveMinimum: 0, maximum: 1, default: 0.85}
+    retrieval_action: {enum: [drop_chunk, escalate, block], default: drop_chunk}
+    scan_roles: {type: array, items: {enum: [system, user, assistant, tool]}, default: [user]}
+    extra_patterns:
+      type: array
+      maxItems: 50
+      items:
+        type: object
+        additionalProperties: false
+        required: [name, pattern, weight]
+        properties:
+          name: {type: string, pattern: "^[a-z][a-z0-9_]{1,39}$"}
+          pattern: {type: string, maxLength: 300}
+          weight: {type: number, exclusiveMinimum: 0, maximum: 1}

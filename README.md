@@ -24,7 +24,11 @@ guardrail (PII, prompt injection, toxicity, secrets, …) plugs in without chang
 | --- | --- | --- |
 | **`ai-gateway-pii`**, via the **AI Gateway** | Personal data: emails, names, phone numbers, SSNs, card numbers, national IDs, your own patterns | **Available now.** On by default on input, retrieval, tool and output |
 | Policy checks (OPA) | Trust and risk scores, allowed tools, delegation depth, required guardrails | **Available now.** Always on |
-| Prompt injection, toxicity, secrets, topic limits, grounding, … | Other kinds of content | **Not built yet.** Add them as plugins ([how](docs/adding-a-guardrail.md)) |
+| `secrets` | API keys, tokens, private keys and passwords in any stage | Available. Shadow in dev; redacts or blocks when enforced |
+| `prompt-injection` | Instructions hidden in user input, retrieved documents and tool results (heuristic) | Available. Shadow in dev; measure before enforcing |
+| `topic-limits` | Denied topics, and requests outside what the agent is for | Available. Needs your topic lists |
+| `content-moderation` | Harassment, hate, violence, self-harm, sexual content (OpenAI-compatible moderation endpoint) | Available. Needs an endpoint and key |
+| Grounding, model-based injection detection, … | Other kinds of content | **Not built yet.** Add them as plugins ([how](docs/adding-a-guardrail.md)) |
 
 The full catalog, with what the AI Gateway detects, its settings and how every guardrail
 behaves, is in **[docs/guardrails.md](docs/guardrails.md)**.
@@ -226,6 +230,13 @@ enforcing. See [docs/advisors.md](docs/advisors.md) and
 [docs/testing-advisors.md](docs/testing-advisors.md). The adaptive red-team harness that measures
 Gate 1 (exfiltration attack success) is run against a staging gateway, outside this repository.
 
-**Guardrails today:** `ai-gateway-pii` (the AI Gateway) and the OPA policy checks. The next
-guardrails, such as prompt injection, toxicity and secrets, are not built yet. See
-[docs/guardrails.md](docs/guardrails.md#guardrails-you-can-add).
+**Phase 9, Gate 1 readiness and new guardrails:** four guardrails (`secrets`, `prompt-injection`,
+`topic-limits`, `content-moderation`); open inventory findings now raise risk on the gateway
+(`AGENT_FINDING`, `TOOL_DEFINITION_CHANGED`); a fast-path latency benchmark for the gate's
+"under 15 ms at p99" (`python -m app.bench`); and calibration of the local advisor from what your
+reviewers and users decided. See [docs/gate-1.md](docs/gate-1.md) and
+[docs/guardrails.md](docs/guardrails.md).
+
+**Guardrails today:** `ai-gateway-pii` (the AI Gateway), `secrets`, `prompt-injection`,
+`topic-limits`, `content-moderation` and the OPA policy checks. See
+[docs/guardrails.md](docs/guardrails.md).

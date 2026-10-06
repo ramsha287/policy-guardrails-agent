@@ -401,6 +401,9 @@ def test_flow_enforcing_advisor_tightens_and_the_agent_never_sees_why():
     assert audited["points"] == 10 and audited["verify"] is True
     assert {a["advisor"] for a in audited["answers"]} == {"secret-advisor-name"}
     assert SECRET_TEXT not in json.dumps(audited)
+    # the question's features are audited (for calibration from reviewer decisions), never text
+    assert audited["features"]["stage"] == "tool" and audited["features"]["destination"] == "external"
+    assert "status.example.org" not in json.dumps(audited)
 
 
 def test_flow_benign_advisor_cannot_loosen():

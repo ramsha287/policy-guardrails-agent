@@ -48,6 +48,9 @@ class RiskConfig(BaseModel):
     unknown_tool: int = 15
     multiple_statements: int = 10
     confidence_penalty: int = 20
+    # From the agent inventory (control plane discovery), published in the catalog:
+    agent_finding: int = 20  # the agent has an open finding (e.g. it also reaches models directly)
+    tool_definition_changed: int = 25  # the tool's definition changed after it was approved
 
     elevated_row_limit: int = 1000  # elevated-risk SQL reads are capped to this many rows (obligation)
     penalty_after_denials: int = 3
@@ -113,6 +116,8 @@ def assess(
     has_session_id: bool,
     cfg: RiskConfig,
     now: float,
+    agent_findings: tuple[str, ...] = (),
+    tool_flagged: bool = False,
 ) -> Assessment:
     sig: list[Signal] = []
     d = descriptor
@@ -166,6 +171,10 @@ def assess(
         sig.append(Signal("UNKNOWN_TOOL", cfg.unknown_tool, "; ".join(d.notes) or "unrecognised tool"))
     if d.statements > 1:
         sig.append(Signal("MULTIPLE_STATEMENTS", cfg.multiple_statements, f"{d.statements} statements"))
+    if agent_findings:
+        sig.append(Signal("AGENT_FINDING", cfg.agent_finding, ", ".join(sorted(set(agent_findings)))))
+    if stage == "tool" and tool_flagged:
+        sig.append(Signal("TOOL_DEFINITION_CHANGED", cfg.tool_definition_changed, "changed since it was approved"))
 
     # Confidence: how much of the context we actually had. Missing context counts as risk.
     parts = [

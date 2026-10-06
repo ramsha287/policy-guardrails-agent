@@ -19,6 +19,7 @@ RISK_MODE controls how much of this changes decisions:
 
 from __future__ import annotations
 
+import re
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -80,6 +81,39 @@ def _request_digest(body: GuardRequest) -> str:
 FOLLOW_UP_OUTCOMES = frozenset({"allow", "allow_restricted", "modify"})
 
 
+_QUALIFIERS = ("__", "/", ":", ".")
+
+
+def _same_server(prefix: str, server: str) -> bool:
+    """`prefix` is what the agent put before the tool name (e.g. "mcp__crm-demo"); `server` is the
+    inventory's server name (configured name, serverInfo name or host)."""
+    norm = lambda v: v.replace("_", "-")  # noqa: E731
+    p, s = norm(prefix), norm(server)
+    last = re.split(r"--|/|:", p)[-1]  # "__" became "--"; dots stay, hostnames keep theirs
+    return p == s or last == s or last == s.split(".")[0]
+
+
+def tool_is_flagged(name: str, flagged: frozenset[str]) -> bool:
+    """Is this tool call to an MCP tool whose definition changed? Flags are "<server>/<tool>".
+
+    A bare tool name matches (the call doesn't say which server). A qualified name (server__tool,
+    server/tool, server:tool, server.tool) matches only when its server part is that server, so a
+    changed `query` on one MCP server doesn't flag every `catalog.query` in the tenant."""
+    if not flagged:
+        return False
+    n = name.lower()
+    for f in flagged:
+        server, _, tool = f.lower().rpartition("/")
+        if n in (tool, f.lower()):
+            return True
+        for sep in _QUALIFIERS:
+            if n.endswith(sep + tool) and len(n) > len(sep + tool):
+                prefix = n[: -len(sep + tool)]
+                if not server or _same_server(prefix, server):
+                    return True
+    return False
+
+
 def volume_key(d: ActionDescriptor) -> str | None:
     return f"{d.kind}:{d.verb}:{d.target}" if d.kind in ("sql", "http", "file") and d.target else None
 
@@ -121,7 +155,8 @@ class ContextualDecisions:
 
     async def prepare(
         self, *, principal: Principal, body: GuardRequest, stage: Stage, payload: Payload, environment: str,
-        inherent_risk: int, base_trust: int,
+        inherent_risk: int, base_trust: int, agent_findings: tuple[str, ...] = (),
+        flagged_tools: frozenset[str] = frozenset(),
     ) -> Prepared:  # fmt: skip
         tool = payload.tool_call
         d = describe(
@@ -151,6 +186,8 @@ class ContextualDecisions:
             has_session_id=bool(body.session_id),
             cfg=self.cfg,
             now=self._now(),
+            agent_findings=agent_findings,
+            tool_flagged=bool(tool and tool_is_flagged(tool.name, flagged_tools)),
         )
         return Prepared(d, view, a)
 

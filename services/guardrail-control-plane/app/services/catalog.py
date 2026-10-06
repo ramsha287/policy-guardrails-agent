@@ -14,7 +14,7 @@ from typing import Any
 
 from pydantic import ValidationError
 
-from ..domain.compiler import build_catalog, catalog_content_hash, catalog_version, etag
+from ..domain.compiler import InventoryFlags, build_catalog, catalog_content_hash, catalog_version, etag
 from ..domain.rbac import Permission, Principal
 from ..domain.records import (
     ActionRecord,
@@ -33,6 +33,9 @@ from .context import Ctx
 GATEWAY_KEY_PREFIX = "gk_"
 BOUND_KEYS_CAPABILITY = "agent_bound_keys"  # reported in gateway heartbeats from 0.6
 ADVISORS_CAPABILITY = "advisors_v1"  # reported from 0.9: gateways that read the tenant advisor policy
+INVENTORY_RISK_CAPABILITY = "inventory_risk_v1"  # from 0.10: gateways that read open_findings/flagged_tools
+# Inventory findings that become a risk signal on the agent's own requests (registered agents only).
+AGENT_RISK_FINDINGS = frozenset({"unmanaged_agent"})
 BINDING_GATEWAY_WINDOW_MINUTES = 15  # gateways heard from this recently must support bound keys
 
 
@@ -55,12 +58,14 @@ class CatalogService:
 
     async def publish(self) -> CatalogRecord:
         """Rebuild the catalog; store a new version only if the content changed."""
+        tenants = await self.store.list_tenants()
         doc = build_catalog(
-            await self.store.list_tenants(),
+            tenants,
             await self.store.list_api_keys(),
             await self.store.list_agents(),
             await self.store.list_actions(),
             await self.store.list_modifiers(),
+            inventory=await self._inventory_flags([t.id for t in tenants]),
         )
         digest = catalog_content_hash(doc)
         current = await self.store.current_catalog()
@@ -344,6 +349,40 @@ class CatalogService:
     async def list_modifiers(self, p: Principal, tenant_id: str) -> list[ModifierRecord]:
         p.require(Permission.READ, tenant_id)
         return await self.store.list_modifiers(tenant_id)
+
+    async def _inventory_flags(self, tenant_ids: list[str]) -> dict[str, InventoryFlags] | None:
+        """Open inventory findings that gateways turn into risk signals. Left out entirely while any
+        live gateway predates them (it would reject the catalog and keep serving a stale one)."""
+        recent = utcnow() - timedelta(minutes=BINDING_GATEWAY_WINDOW_MINUTES)
+        if any(
+            g.last_seen >= recent and INVENTORY_RISK_CAPABILITY not in g.capabilities
+            for g in await self.store.list_gateways()
+        ):
+            return None
+        out: dict[str, InventoryFlags] = {}
+        for tid in tenant_ids:
+            relevant = [
+                f
+                for f in await self.store.list_findings(tid, status="open", limit=100_000)
+                if f.kind in AGENT_RISK_FINDINGS or f.kind == "tool_definition_changed"
+            ]
+            if not relevant:
+                continue
+            # one query for the tenant's entities, not one per finding
+            entities = {e.id: e for e in await self.store.list_entities(tid, limit=1_000_000)}
+            flags = InventoryFlags()
+            for f in relevant:
+                e = entities.get(f.entity_id)
+                if e is None:
+                    continue
+                if f.kind in AGENT_RISK_FINDINGS and e.registry_agent_id:
+                    flags.agent_findings.setdefault(e.registry_agent_id, []).append(f.kind)
+                elif f.kind == "tool_definition_changed":
+                    # "<server>/<tool>": the gateway matches qualified calls only for that server
+                    flags.flagged_tools.append(e.name)
+            if flags.agent_findings or flags.flagged_tools:
+                out[tid] = flags
+        return out
 
     async def current_document(self) -> tuple[dict[str, Any], str] | None:
         rec = await self.store.current_catalog()

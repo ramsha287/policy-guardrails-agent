@@ -234,6 +234,7 @@ class DiscoveryService:
                 c.id, self.instance, status=run.status, error=run.error, finished_at=run.finished_at or self.now()
             )
         DISCOVERY_RUNS.labels(c.kind, run.status).inc()
+        await self._republish()
         return run
 
     async def run_due(self) -> int:
@@ -253,6 +254,7 @@ class DiscoveryService:
         removed = await self.store.prune_observations(self.now() - timedelta(days=OBSERVATION_RETENTION_DAYS))
         for t in await self.store.list_tenants():  # time alone moves agents to stale
             await self.pipeline.reconcile_tenant(t.id)
+        await self._republish()
         return removed
 
     # ---- inventory -----------------------------------------------------------------------------
@@ -423,6 +425,7 @@ class DiscoveryService:
             await self.ctx.log("inventory_entity", e.id, "link", p.actor, after={"agent_id": agent_id})
             await self.pipeline.reconcile_tenant(tenant_id)
             merged = await self.store.find_entities(tenant_id, [key])
+        await self._republish()
         return merged[0] if merged else await self._entity(tenant_id, entity_id)
 
     async def register(
@@ -464,12 +467,24 @@ class DiscoveryService:
                 after={"days": days, "reason": reason},
             )
             await self.pipeline.reconcile_tenant(tenant_id)
+        await self._republish()
         return await self._entity(tenant_id, entity_id)
+
+    async def _republish(self) -> None:
+        """Findings feed the gateways' risk through the catalog (open_findings, flagged_tools). A new
+        catalog version is stored only when that content actually changed."""
+        if self.catalog is None:
+            return
+        try:
+            await self.catalog.publish()
+        except Exception:  # noqa: BLE001 - the inventory change stands; the next publish catches up
+            logger.warning("catalog republish after an inventory change failed", exc_info=True)
 
     async def reconcile(self, p: Principal, tenant_id: str) -> dict[str, int]:
         p.require(Permission.INVENTORY_WRITE, tenant_id)
         await self._tenant(tenant_id)
         stats = await self.pipeline.reconcile_tenant(tenant_id)
+        await self._republish()
         return {
             "findings_opened": stats.findings_opened,
             "findings_resolved": stats.findings_resolved,
@@ -517,6 +532,7 @@ class DiscoveryService:
                 }
                 await self.store.put_entity(e)
         await self.store.put_finding(f)
+        await self._republish()
         await self.ctx.log(
             "inventory_finding",
             f.id,

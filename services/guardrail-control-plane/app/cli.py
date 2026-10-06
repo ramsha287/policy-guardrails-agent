@@ -6,6 +6,8 @@
     python -m app.cli dev-certs --out /certs --names guardrail-control-plane,guardrail-gateway
     python -m app.cli discovery-sync [--tenant acme] [--connector ID]   run connectors now (cron/CI)
     python -m app.cli discovery-reconcile [--tenant acme]                re-evaluate states and findings
+    python -m app.cli advisor-training-set --out set.jsonl [--days 30] [--tenant acme] [--include-released]
+                                         labelled advisor features for app.advise.calibrate (needs AUDIT_DSN)
 
 `import-gateway` migrates an existing phase 1-3 deployment: it copies tenants, gateway API key
 *hashes* (existing agent keys keep working), agents, actions and modifiers from the gateway's
@@ -178,6 +180,33 @@ async def _discovery(ctx: Ctx, args: argparse.Namespace, settings: Any) -> int:
                 await audit_engine.dispose()
 
 
+async def _training_set(ctx: Ctx, args: argparse.Namespace, settings: Any) -> int:
+    from datetime import UTC, datetime, timedelta
+
+    from .main import _sql_fetcher
+    from .services.advisor_training import training_set
+
+    if not settings.audit_dsn:
+        print("advisor-training-set needs AUDIT_DSN (read access to the gateway's audit schema)", file=sys.stderr)
+        return 2
+    audit_engine = make_engine(settings.audit_dsn)
+    try:
+        rows, counts = await training_set(
+            _sql_fetcher(make_sessionmaker(audit_engine)),
+            ctx.store,
+            since=datetime.now(UTC) - timedelta(days=max(1, args.days)),
+            tenant_id=args.tenant,
+            include_released=args.include_released,
+        )
+    finally:
+        await audit_engine.dispose()
+    with open(args.out, "w", encoding="utf-8") as fh:
+        for r in rows:
+            fh.write(json.dumps(r, sort_keys=True) + "\n")
+    print(json.dumps({"out": args.out, **counts}))
+    return 0
+
+
 async def _main(args: argparse.Namespace) -> int:
     settings = get_settings()
     engine = make_engine(settings.postgres_dsn)
@@ -199,6 +228,8 @@ async def _main(args: argparse.Namespace) -> int:
                 print(raw)
         elif args.command in ("discovery-sync", "discovery-reconcile"):
             return await _discovery(ctx, args, settings)
+        elif args.command == "advisor-training-set":
+            return await _training_set(ctx, args, settings)
         elif args.command == "import-gateway":
             report = await _import_gateway(ctx, [Path(p) for p in args.snapshot], [Path(p) for p in args.plugin_dir])
             print(json.dumps(report, indent=2))
@@ -251,6 +282,13 @@ def main(argv: list[str] | None = None) -> int:
         ds.add_argument("--tenant", default=None, help="default: every tenant")
         if name == "discovery-sync":
             ds.add_argument("--connector", default=None, help="one connector id")
+    ts = sub.add_parser("advisor-training-set", help="labelled advisor features for calibration (needs AUDIT_DSN)")
+    ts.add_argument("--out", required=True, help="JSON Lines file to write")
+    ts.add_argument("--days", type=int, default=30)
+    ts.add_argument("--tenant", default=None, help="default: every tenant")
+    ts.add_argument(
+        "--include-released", action="store_true", help="add released, unreviewed requests as weak negatives"
+    )
     args = p.parse_args(argv)
     if args.command == "dev-certs":  # no database needed
         from guardrail_sdk.devcerts import generate

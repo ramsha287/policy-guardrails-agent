@@ -112,6 +112,16 @@ class CatalogAgent(BaseModel):
     agent_id: str
     base_trust_score: int = Field(ge=0, le=100)
     allowed_tools: list[str] = Field(default_factory=lambda: ["*"])
+    # Open inventory findings on this agent (e.g. "unmanaged_agent": it also reaches models directly).
+    # The gateway turns them into a capped risk signal. Left out of the published JSON when empty.
+    open_findings: list[str] = Field(default_factory=list)
+
+    @model_serializer(mode="wrap")
+    def _omit_no_findings(self, handler: SerializerFunctionWrapHandler) -> Any:
+        data = handler(self)
+        if not data.get("open_findings"):
+            data.pop("open_findings", None)
+        return data
 
 
 class CatalogAction(BaseModel):
@@ -143,12 +153,16 @@ class CatalogTenant(BaseModel):
     # Data classes hosted advisors may see for this tenant (opt-in per class; empty = none).
     # Left out of the published JSON when empty, so older gateways still load the catalog.
     advisor_data_classes: list[Literal["PUBLIC", "INTERNAL", "CONFIDENTIAL", "PII"]] = Field(default_factory=list)
+    # Tool names whose definition changed after it was approved (an open tool_definition_changed
+    # finding in the inventory). Calling one is a risk signal. Left out of the JSON when empty.
+    flagged_tools: list[str] = Field(default_factory=list)
 
     @model_serializer(mode="wrap")
-    def _omit_default_advisor_policy(self, handler: SerializerFunctionWrapHandler) -> Any:
+    def _omit_defaults(self, handler: SerializerFunctionWrapHandler) -> Any:
         data = handler(self)
-        if not data.get("advisor_data_classes"):
-            data.pop("advisor_data_classes", None)
+        for key in ("advisor_data_classes", "flagged_tools"):
+            if not data.get(key):
+                data.pop(key, None)
         return data
 
 

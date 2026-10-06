@@ -91,6 +91,8 @@ async def run_stage(
                 environment=ctx.environment,
                 inherent_risk=ctx.risk_score,
                 base_trust=ctx.trust_score,
+                agent_findings=built.agent.open_findings if built.agent else (),
+                flagged_tools=built.flagged_tools,
             )
 
         table: TableResult | None = None

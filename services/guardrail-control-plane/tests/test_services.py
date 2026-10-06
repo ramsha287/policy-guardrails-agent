@@ -1,3 +1,4 @@
+import json
 from datetime import timedelta
 
 import pytest
@@ -642,3 +643,45 @@ async def test_advisor_pilot_analytics_shapes_the_audit_rows():
         await AnalyticsService(fetch).advisors(ACME_ADMIN, tenant_id="other")
     with pytest.raises(AnalyticsUnavailable):
         await AnalyticsService(None).advisors(ALICE)
+
+
+async def test_advisor_training_set_labels_from_people_only():
+    from datetime import timedelta as td
+
+    from app.domain.records import ReviewRecord
+    from app.services.advisor_training import training_set
+
+    ctx, store, _ = make_ctx()
+    now = utcnow()
+    for rid, status in (("r-rej", "rejected"), ("r-app", "approved"), ("r-pend", "pending")):
+        await store.add_review(
+            ReviewRecord(tenant_id="acme", environment="production", request_id=rid, stage="tool", agent_id="a",
+                         guardrail_id="gateway-risk", reason="held", payload_enc=b"x", status=status,
+                         expires_at=now + td(minutes=15))
+        )  # fmt: skip
+    features = {"stage": "tool", "kind": "http"}
+
+    def row(rid, outcome="hold", codes=(), f=features):
+        return {"request_id": rid, "tenant_id": "acme", "outcome": outcome, "reason_codes": list(codes),
+                "features": json.dumps(f) if isinstance(f, dict) else f}  # fmt: skip
+
+    audit = [
+        row("r-rej"), row("r-app"), row("r-pend"),
+        row("u-no", "deny", ["USER_REJECTED"]), row("u-yes", "allow", ["VERIFIED", "EVIDENCE_USER_CONFIRMATION"]),
+        row("dry-run", "allow", ["VERIFIED", "EVIDENCE_SQL_DRY_RUN"]),
+        row("plain", "allow"), row("broken", "allow", ["VERIFIED"], f="null"),
+    ]  # fmt: skip
+    seen = []
+
+    async def fetch(sql, params):
+        seen.append(params)
+        return audit
+
+    rows, counts = await training_set(fetch, store, since=now - td(days=30), tenant_id="acme")
+    labels = {r["request_id"]: r["label"] for r in rows}
+    assert labels == {"r-rej": 1, "r-app": 0, "u-no": 1, "u-yes": 0}  # pending and unreviewed: no label
+    assert counts == {"rows": 8, "positive": 2, "negative": 2, "weak": 0, "skipped": 4}  # a dry run isn't a person
+    assert seen[0]["tenant_id"] == "acme"
+    rows, counts = await training_set(fetch, store, since=now - td(days=30), include_released=True)
+    weak = [r for r in rows if r["weak"]]
+    assert [r["request_id"] for r in weak] == ["dry-run", "plain"] and counts["weak"] == 2

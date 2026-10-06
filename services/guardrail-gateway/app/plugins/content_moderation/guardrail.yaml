@@ -1,0 +1,37 @@
+# Harmful content through an OpenAI-compatible moderation endpoint (OpenAI, or self-hosted).
+id: content-moderation
+version: 1.0.0
+kind: remote
+description: >
+  Harassment, hate, violence, self-harm and sexual content in prompts and answers, scored by an
+  OpenAI-compatible /moderations endpoint (OpenAI's moderation API, or a self-hosted model behind
+  the same API). Blocks the categories you list, escalates other flagged content.
+owner: ai-security
+data_handling: >
+  Sends the scanned message text to the moderation endpoint the operator configured
+  (MODERATION_BASE_URL; default https://api.openai.com/v1). Use a self-hosted endpoint for data that
+  may not leave your network. Stores nothing. Findings carry categories, scores and locations only.
+stages: [input, output]
+decisions_emitted: [allow, escalate, block]
+failure_mode: fail_closed
+latency_budget_ms: 600
+capabilities:
+  needs_raw_payload: true
+  parallel_safe: true
+  supports_batch: true
+  max_payload_kb: 1024
+entrypoint: app.plugins.content_moderation.guardrail:ContentModerationGuardrail
+remote:
+  endpoint: https://api.openai.com/v1          # operator override: MODERATION_BASE_URL
+  auth: api_key
+  api_key_ref: env://MODERATION_API_KEY
+  timeout_ms: 2000
+config_schema:
+  type: object
+  additionalProperties: false
+  properties:
+    model: {type: string, default: omni-moderation-latest}
+    block_categories: {type: array, items: {type: string}, default: [sexual/minors]}
+    on_flagged: {enum: [escalate, block, allow], default: escalate}
+    thresholds: {type: object, additionalProperties: {type: number, minimum: 0, maximum: 1}}
+    scan_roles: {type: array, items: {enum: [system, user, assistant, tool]}, default: [user, assistant]}

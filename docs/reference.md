@@ -125,7 +125,8 @@ cd services/ai-gateway/instant-redaction-service && pip install -r requirements-
 ```
 
 Step-by-step checks of identity binding, risk, verification, AuthZEN and decision events on a
-running stack: [testing-contextual-decisions.md](testing-contextual-decisions.md). Advisors:
+running stack: [testing-contextual-decisions.md](testing-contextual-decisions.md). Gate 1 (latency,
+discovery, exfiltration): [gate-1.md](gate-1.md). Advisors:
 [testing-advisors.md](testing-advisors.md). Discovery: [testing-discovery.md](testing-discovery.md).
 
 
@@ -135,7 +136,9 @@ running stack: [testing-contextual-decisions.md](testing-contextual-decisions.md
 packages/guardrail-sdk/           contracts, Guardrail base class, manifest, conformance + evaluation, agent client and hooks
   guardrail_sdk/integrations/     guard_tool, LangGraph nodes/retriever, CrewAI tool/inputs/output
 services/guardrail-gateway/       :8100  gateway + context builder + OPA client + engine + audit
-  app/advise/                     advisors: contract, panel (caps/band/data-policy), local/http/bedrock providers
+  app/advise/                     advisors: contract, panel (caps/band/data-policy), local/http/bedrock providers, calibrate
+  app/plugins/                    guardrails: ai_gateway_pii, secrets, prompt_injection, topic_limits, content_moderation, noop
+  app/bench.py                    fast-path latency benchmark (Gate 1)
   app/plugins/ai_gateway_pii/     AI Gateway PII guardrail: 1.0.0 (input/output), 1.1.0 (all four stages)
   app/plugins/noop/               reference local guardrail / template
   config/snapshots/<env>.json     which guardrails run where with CONFIG_SOURCE=file (seed for the control plane)
@@ -147,7 +150,7 @@ deploy/secrets/                   SOPS + age setup and the Secret template
 services/ai-gateway/              the AI Gateway: existing PII redaction platform (project-service :8000, instant-redaction :8001)
 policies/guardrails/              Rego authorization policy + tests
 examples/sample_agent/            framework-free agent using all four stages
-eval/                             labelled PII dataset (880 cases) + generator + eval config
+eval/                             labelled PII dataset (880 cases), secrets set generator, eval config
 tests/e2e/                        sample agent against a fake gateway and the live stack
 docs/                             guardrail catalog, agent integration, adding guardrails, control plane, deployment, runbooks, security
 ```
