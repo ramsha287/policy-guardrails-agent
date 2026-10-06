@@ -36,6 +36,10 @@ import type {
   Snapshot,
   Stage,
   DataClass,
+  DecisionLog,
+  DecisionRecord,
+  GuardRequestBody,
+  PlaygroundResult,
   Tenant,
 } from "./types";
 
@@ -298,6 +302,32 @@ export class Api {
   }
   advisorAnalytics(filter: { environment?: Environment | ""; tenant_id?: string; hours?: number } = {}) {
     return this.get<AdvisorAnalytics>("/analytics/advisors", filter);
+  }
+  /** The decision log: the gateway's audit records, newest first (needs AUDIT_DSN). */
+  decisions(
+    filter: {
+      environment?: Environment | "";
+      tenant_id?: string;
+      hours?: number;
+      limit?: number;
+      agent_id?: string;
+      stage?: Stage | "";
+      decision?: string;
+      outcome?: string;
+      session_id?: string;
+    } = {},
+  ) {
+    return this.get<DecisionLog>("/decisions", filter);
+  }
+  decision(requestId: string) {
+    return this.get<DecisionRecord>(`/decisions/${encodeURIComponent(requestId)}`);
+  }
+  /** A real, audited request through the gateway with an agent's key (unlike simulate). */
+  playground(body: { environment: Environment; stage: Stage; gateway_key: string; request: GuardRequestBody }) {
+    return this.request<PlaygroundResult>("POST", "/playground", body);
+  }
+  playgroundEscalation(id: string, body: { environment: Environment; gateway_key: string }) {
+    return this.request<PlaygroundResult>("POST", `/playground/escalations/${encodeURIComponent(id)}`, body);
   }
   simulate(body: {
     environment: Environment;

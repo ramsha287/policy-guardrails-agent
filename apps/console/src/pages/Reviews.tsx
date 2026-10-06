@@ -297,7 +297,8 @@ function ReviewDetail({
           ]}
         />
         <div>
-          <p className="field-label">Preview (redacted)</p>
+          <p className="field-label">Preview</p>
+          <p className="field-hint">The first 500 characters of the held payload, after any redaction an earlier guardrail applied.</p>
           <div className="preview">{r.preview || "No preview available."}</div>
         </div>
 

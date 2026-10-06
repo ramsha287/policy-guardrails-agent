@@ -248,11 +248,13 @@ jobs:
       - name: Start the stack
         run: |
           docker compose up --build -d
+          docker compose --profile discovery-demo up -d mcp-demo
           timeout 900 sh -c 'until curl -sf localhost:8100/ready >/dev/null; do sleep 5; done'
       - run: pip install -e "packages/guardrail-sdk[test]"
-      - name: Sample agent + control-plane changes against the live stack
+      - name: Sample agent, control-plane changes and the security flows against the live stack
         run: |
           export GUARDRAIL_E2E_URL=http://localhost:8100 CONTROL_PLANE_E2E_URL=http://localhost:8200
+          export E2E_MCP_URL=http://mcp-demo:8765/mcp
           export GUARDRAIL_E2E_KEY=$(docker compose exec -T guardrail-gateway sh -c '. /bootstrap/dev.env; echo $DEMO_GATEWAY_API_KEY')
           export CP_E2E_ADMIN_KEY=$(docker compose exec -T guardrail-control-plane sh -c '. /bootstrap/cp.env; echo $CP_ADMIN_KEY')
           pytest tests/e2e -v

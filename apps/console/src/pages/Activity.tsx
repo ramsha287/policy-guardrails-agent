@@ -9,7 +9,7 @@ import { useQueryParam, useRoute } from "../lib/router";
 import { useSession } from "../lib/session";
 import type { Change } from "../lib/types";
 
-const ENTITIES = ["", "snapshot", "publish_request", "assignment", "guardrail_version", "tenant", "api_key", "agent", "action", "modifier", "review", "admin_key"];
+const ENTITIES = ["", "snapshot", "publish_request", "assignment", "guardrail_version", "tenant", "api_key", "agent", "action", "modifier", "review", "admin_key", "connector", "inventory_entity", "inventory_finding", "playground"];
 
 export function ActivityPage() {
   const { api } = useSession();

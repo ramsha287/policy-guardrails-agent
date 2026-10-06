@@ -137,6 +137,9 @@ services:
       # Agent discovery (docs/discovery.md). Dev only: the demo MCP server speaks plain http.
       DISCOVERY_ALLOW_HTTP: "true"
       DISCOVERY_LOG_DIR: /var/lib/guardrail-discovery/logs
+      # Console -> Playground: send real, audited agent requests to the dev gateway (docs/console.md).
+      PLAYGROUND_ENVIRONMENTS: '["dev"]'
+
     volumes:
       - bootstrap:/bootstrap
       # DNS query logs for the dns_log connector (python examples/discovery/make_dns_log.py)

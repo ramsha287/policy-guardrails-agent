@@ -13,6 +13,7 @@ from ..services.catalog import CatalogService
 from ..services.context import Ctx
 from ..services.discovery import DiscoveryService
 from ..services.gateways import GatewayService
+from ..services.playground import PlaygroundService
 from ..services.publishing import PublishService
 from ..services.registry import RegistryService
 from ..services.reviews import ReviewService
@@ -31,6 +32,8 @@ class Container:
     discovery_http: httpx.AsyncClient | None = None
     discovery_allow_http: bool = False
     discovery_max_observations: int = 20_000
+    playground_environments: frozenset[str] = frozenset()
+    playground_gateway_urls: dict[str, str] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         self.catalog = CatalogService(self.ctx)
@@ -56,5 +59,12 @@ class Container:
             self.http,
             self.internal_token,
             gateway_urls=self.gateway_urls,
+            default_gateway_url=self.gateway_url,
+        )
+        self.playground = PlaygroundService(
+            self.ctx,
+            self.http,
+            environments=self.playground_environments,
+            gateway_urls={**self.gateway_urls, **self.playground_gateway_urls},
             default_gateway_url=self.gateway_url,
         )

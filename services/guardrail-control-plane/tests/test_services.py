@@ -685,3 +685,19 @@ async def test_advisor_training_set_labels_from_people_only():
     rows, counts = await training_set(fetch, store, since=now - td(days=30), include_released=True)
     weak = [r for r in rows if r["weak"]]
     assert [r["request_id"] for r in weak] == ["dry-run", "plain"] and counts["weak"] == 2
+
+
+async def test_tenant_keys_only_see_their_own_assignments_in_snapshots():
+    ctx, _, _ = make_ctx()
+    await setup_registry(ctx)
+    svc, pub = AssignmentService(ctx), PublishService(ctx)
+    await svc.put(EDITOR, "dev", pii_assignment())
+    await svc.put(EDITOR, "dev", pii_assignment(id="acme-pii", scope_type="tenant", scope_id="acme"))
+    await svc.put(EDITOR, "dev", pii_assignment(id="globex-pii", scope_type="tenant", scope_id="globex"))
+    live = (await pub.publish(ALICE, "dev")).snapshot
+    assert live is not None
+    ids = lambda snap: sorted(a["id"] for a in snap.document["assignments"])  # noqa: E731
+    assert ids(await pub.snapshot(ALICE, "dev", None)) == ["acme-pii", "global-pii", "globex-pii"]
+    assert ids(await pub.snapshot(ACME_ADMIN, "dev", None)) == ["acme-pii", "global-pii"]
+    assert ids(await pub.snapshot(ACME_REVIEWER, "dev", live.version)) == ["acme-pii", "global-pii"]
+    assert await pub.snapshot(ACME_ADMIN, "dev", "no-such-version") is None

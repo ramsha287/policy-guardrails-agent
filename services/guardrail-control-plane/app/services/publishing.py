@@ -26,6 +26,7 @@ from ..domain.records import AssignmentRecord, PublishRequestRecord, SnapshotRec
 from ..errors import NotFound, StateConflict, ValidationFailed
 from ..events import SNAPSHOT_CHANNEL
 from ..metrics import SNAPSHOTS_PUBLISHED
+from .assignments import _tenant_of
 from .context import Ctx
 from .registry import RegistryService
 
@@ -288,3 +289,22 @@ class PublishService:
     async def requests(self, p: Principal, environment: str | None, status: str | None) -> list[PublishRequestRecord]:
         p.require(Permission.READ, p.tenant_id)
         return await self.store.list_publish_requests(environment, status)
+
+    async def snapshot(self, p: Principal, environment: str, version: str | None) -> SnapshotRecord | None:
+        """One snapshot with its document (`version=None`: the live one). A tenant key sees the
+        global assignments and its own tenant's, never another tenant's."""
+        p.require(Permission.READ, p.tenant_id)
+        snap = (
+            await self.store.current_snapshot(environment)
+            if version is None
+            else await self.store.get_snapshot(environment, version)
+        )
+        if snap is None or p.is_platform:
+            return snap
+        return snap.model_copy(update={"document": visible_document(p, snap.document)})
+
+
+def visible_document(p: Principal, document: dict[str, Any]) -> dict[str, Any]:
+    """The snapshot document as a tenant key may see it: global and own-tenant assignments only."""
+    kept = [a for a in document.get("assignments", []) if _tenant_of(a) in (None, p.tenant_id)]
+    return {**document, "assignments": kept}

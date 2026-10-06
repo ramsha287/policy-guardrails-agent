@@ -1,7 +1,8 @@
 """Tables owned by the guardrail gateway.
 
-`guardrail.*` holds tenants, gateway API keys and the scoring catalog. These move to the
-control-plane service in phase 4; the gateway will then read them through the snapshot.
+`guardrail.*` holds tenants, gateway API keys and the scoring catalog for CONFIG_SOURCE=file. With
+the control plane, the gateway reads them from the catalog document instead (the control plane
+imports these tables once).
 `audit.*` holds the append-only decision log (monthly partitions, 12-month retention).
 """
 

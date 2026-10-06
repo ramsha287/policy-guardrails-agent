@@ -26,6 +26,7 @@ import {
   STATE_HELP,
   STATE_LABEL,
   canBeAgent,
+  definitionChange,
   severityTone,
   sourcesOf,
   stateTone,
@@ -335,6 +336,7 @@ function FindingsCard({
                       {f.summary}
                     </button>
                     <span className="cell-sub">{FINDING_LABEL[f.kind] ?? f.kind}</span>
+                    <DefinitionChange finding={f} />
                   </td>
                   <td className="nowrap">{relativeTime(f.created_at, now)}</td>
                   <td className="cell-actions">
@@ -356,6 +358,21 @@ function FindingsCard({
         </div>
       )}
     </Card>
+  );
+}
+
+/** What changed in an MCP tool's definition: check it before accepting (accepting pins the new one). */
+function DefinitionChange({ finding }: { finding: Finding }) {
+  const change = definitionChange(finding);
+  if (!change) return null;
+  return (
+    <span className="cell-sub">
+      <span className="diff-old">Approved: {change.before || "(no description)"}</span>
+      <br />
+      <span className="diff-new">Now: {change.after || "(no description)"}</span>
+      <br />
+      Accept pins the new definition; until then, calls to this tool carry the TOOL_DEFINITION_CHANGED risk signal.
+    </span>
   );
 }
 
