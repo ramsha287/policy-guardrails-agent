@@ -85,7 +85,8 @@ export const SCENARIOS: Scenario[] = [
       agent: "research-agent",
       action: "llm.chat",
       classification: "PII",
-      text: "My SSN is 123-45-6789, please update my account.",
+      // Not 123-45-6789: Presidio ignores well-known sample SSNs, so that one is allowed.
+      text: "My SSN is 536-22-1234, please update my account.",
     }),
   },
   {

@@ -175,12 +175,13 @@ async def test_pii_is_redacted_or_blocked(console: Console):
     )
     assert status == 200 and r["decision"] == "modify", r
     assert "jane.doe@example.com" not in r["payload"]["text"] and "[EMAIL_ADDRESS]" in r["payload"]["text"]
-    status, r = await console.send("input", chat("My SSN is 123-45-6789, please update my account."))
+    # Not 123-45-6789: Presidio ignores well-known sample SSNs (123456789, 078051120, ...).
+    status, r = await console.send("input", chat("My SSN is 536-22-1234, please update my account."))
     assert r["decision"] == "block" and r["payload"] is None, r
     assert "US_SSN" in r["reason"]
     audit = await console.audit(r["request_id"])
     finding = result_of(audit, "ai-gateway-pii")["findings"][0]
-    assert finding["type"] == "US_SSN" and "123-45" not in json.dumps(audit)  # types and offsets, no values
+    assert finding["type"] == "US_SSN" and "536-22" not in json.dumps(audit)  # types and offsets, no values
 
 
 async def test_secrets_shadow_then_enforced(console: Console):
