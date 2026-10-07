@@ -14,6 +14,7 @@ It runs with Docker Compose on a laptop and on any Kubernetes/k3s cluster with t
 ## Architecture
 
 ```mermaid
+%%{init: {"theme": "base", "themeVariables": {"primaryTextColor": "#0f172a", "lineColor": "#475569", "clusterBkg": "#f8fafc", "clusterBorder": "#cbd5e1", "edgeLabelBackground": "#ffffff"}}}%%
 flowchart LR
   AG["AI agents<br/>SDK · LangGraph · CrewAI<br/>OpenAI proxy · AuthZEN"] -- "gk_ key" --> GW
   P["People<br/>browser"] -- "cpk_ key" --> CP
@@ -32,6 +33,17 @@ flowchart LR
   CP --> DB
   GW <--> R
   CP -- "discovery connectors" --> SRC["Audit log · Kubernetes · DNS logs<br/>OpenAI · Bedrock · MCP servers"]
+
+  classDef client fill:#f1f5f9,stroke:#94a3b8,color:#0f172a
+  classDef service fill:#eff6ff,stroke:#3b82f6,color:#0f172a
+  classDef aigw fill:#ecfdf5,stroke:#059669,stroke-width:3px,color:#064e3b
+  classDef store fill:#f1f5f9,stroke:#64748b,color:#0f172a
+  classDef external fill:#ffffff,stroke:#94a3b8,stroke-dasharray:5 4,color:#334155
+  class AG,P client
+  class GW,CP service
+  class AIG aigw
+  class OPA,DB,R store
+  class SRC external
 ```
 
 | Part | Code | Port |

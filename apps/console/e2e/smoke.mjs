@@ -241,8 +241,11 @@ async function main() {
       await page.getByText("Held for a person").first().waitFor();
       await shot(page, "flow-playground");
       await page.getByRole("button", { name: "Check as the agent" }).first().click();
-      await page.getByText("Agent gets").first().waitFor();
-      check((await page.getByText("pending").count()) > 0, "the agent's poll shows the held request as pending");
+      // Wait for the poll card's state, not just its label: checking once raced the render on CI.
+      const pollCard = page.locator(".card", { hasText: "Held request" }).first();
+      await pollCard.waitFor();
+      const pending = await eventually(async () => /Review\s+pending/i.test(await pollCard.innerText()));
+      check(pending, `the agent's poll shows the held request as pending (${pending ? "ok" : (await pollCard.innerText()).split("\n").slice(0, 4).join(" | ")})`);
       await page.getByRole("button", { name: "Open audit record" }).first().click(); // newest first: the held request
       await page.getByRole("heading", { level: 1, name: "Decision log" }).waitFor();
       await page.getByRole("dialog").getByText("Record hash").waitFor();

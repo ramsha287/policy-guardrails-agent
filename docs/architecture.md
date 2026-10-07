@@ -7,6 +7,7 @@ the [status table](#what-is-built-and-how-well-it-is-tested) says how.
 ## Components
 
 ```mermaid
+%%{init: {"theme": "base", "themeVariables": {"primaryTextColor": "#0f172a", "lineColor": "#475569", "clusterBkg": "#f8fafc", "clusterBorder": "#cbd5e1", "edgeLabelBackground": "#ffffff"}}}%%
 flowchart LR
   subgraph Agents
     A1[AI agent<br/>SDK hooks / LangGraph / CrewAI]
@@ -41,6 +42,17 @@ flowchart LR
   CP -- "discovery connectors (read-only)" --> SRC[Audit log · Kubernetes · DNS logs<br/>OpenAI Admin · Bedrock/AgentCore · MCP servers]
   GW -- "content-moderation (optional)" --> MOD[Moderation endpoint]
   GW -- "advisors http/bedrock (optional, opt-in per tenant)" --> ADV[Hosted classifier]
+
+  classDef client fill:#f1f5f9,stroke:#94a3b8,color:#0f172a
+  classDef service fill:#eff6ff,stroke:#3b82f6,color:#0f172a
+  classDef aigw fill:#ecfdf5,stroke:#059669,stroke-width:3px,color:#064e3b
+  classDef store fill:#f1f5f9,stroke:#64748b,color:#0f172a
+  classDef external fill:#ffffff,stroke:#94a3b8,stroke-dasharray:5 4,color:#334155
+  class A1,A2,A3,OP client
+  class GW,CP service
+  class AIG aigw
+  class OPA,PG,R store
+  class SRC,MOD,ADV external
 ```
 
 | Component | Code | What it owns |
@@ -61,6 +73,7 @@ An agent calls `POST /v1/guard/{input|retrieval|tool|output}` with its gateway k
 sends a prompt, uses retrieved text, runs (or reads the result of) a tool, or returns an answer.
 
 ```mermaid
+%%{init: {"theme": "base", "themeVariables": {"primaryTextColor": "#0f172a", "actorBkg": "#eff6ff", "actorBorder": "#3b82f6", "actorTextColor": "#0f172a", "actorLineColor": "#94a3b8", "signalColor": "#475569", "signalTextColor": "#0f172a", "labelBoxBkgColor": "#fef3c7", "labelBoxBorderColor": "#d97706", "labelTextColor": "#78350f", "loopTextColor": "#78350f", "altSectionBkgColor": "#f8fafc", "sequenceNumberColor": "#ffffff", "noteBkgColor": "#ecfdf5", "noteBorderColor": "#059669"}}}%%
 sequenceDiagram
   autonumber
   participant Ag as Agent
@@ -131,6 +144,7 @@ sequenceDiagram
 ## Configuration flow
 
 ```mermaid
+%%{init: {"theme": "base", "themeVariables": {"primaryTextColor": "#0f172a", "lineColor": "#475569", "edgeLabelBackground": "#ffffff"}}}%%
 flowchart LR
   E[Editor: Pipeline / Tenants & keys] -->|working set| CP[Control plane]
   CP -->|publish: compile + validate| S[(Snapshot vN<br/>immutable)]
@@ -139,6 +153,13 @@ flowchart LR
   S & C -->|Redis push + ETag poll 30 s| GW[Gateways]
   GW -->|disk cache| GW
   GW -->|heartbeat: installed guardrails,<br/>versions, capabilities| CP
+
+  classDef client fill:#f1f5f9,stroke:#94a3b8,color:#0f172a
+  classDef service fill:#eff6ff,stroke:#3b82f6,color:#0f172a
+  classDef store fill:#f1f5f9,stroke:#64748b,color:#0f172a
+  class E client
+  class CP,GW service
+  class S,C store
 ```
 
 - **Snapshots** (one per environment): which guardrail versions run where, in which mode, with
@@ -162,12 +183,20 @@ flowchart LR
 ## Discovery feeds risk
 
 ```mermaid
+%%{init: {"theme": "base", "themeVariables": {"primaryTextColor": "#0f172a", "lineColor": "#475569", "edgeLabelBackground": "#ffffff"}}}%%
 flowchart LR
   K[Connectors<br/>gateway · kubernetes · dns_log<br/>openai_admin · aws_bedrock · mcp] --> O[Observations]
   O --> E[Entities<br/>merged by strong keys] --> CL[Classification<br/>confirmed / probable / not agent]
   CL --> RC[Reconcile with the registry<br/>managed · registered_unmanaged · shadow · stale]
   RC --> F[Findings<br/>shadow_agent · unmanaged_agent · stale_agent<br/>tool_definition_changed]
   F -->|catalog: open_findings, flagged_tools| GW[Gateway risk:<br/>AGENT_FINDING +20<br/>TOOL_DEFINITION_CHANGED +25]
+
+  classDef client fill:#f1f5f9,stroke:#94a3b8,color:#0f172a
+  classDef service fill:#eff6ff,stroke:#3b82f6,color:#0f172a
+  classDef finding fill:#fef3c7,stroke:#d97706,color:#78350f
+  class K client
+  class O,E,CL,RC,GW service
+  class F finding
 ```
 
 Connectors are read-only (list APIs, one audit query, MCP `tools/list` only). An MCP tool's
