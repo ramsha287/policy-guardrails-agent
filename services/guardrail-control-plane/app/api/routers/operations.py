@@ -75,6 +75,7 @@ async def me(p: Principal = Depends(principal), c: Container = Depends(container
             "discovery": True,
             "decisions": c.analytics_fetch is not None,
             "playground": c.playground.enabled_environments(),
+            "memory_firewall": c.memory_firewall is not None,
         },
     }
 

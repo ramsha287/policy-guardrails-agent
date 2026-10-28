@@ -15,6 +15,12 @@ x-gateway-build: &gateway-build
 x-internal: &internal-token
   INTERNAL_TOKEN: ${INTERNAL_TOKEN:-dev-internal-token-change-me}
 
+# Memory Firewall service (docs/memory-firewall.md): where the gateway's
+# `memory-firewall` guardrail and the control plane reach it, and the key they send.
+x-memory-firewall: &memory-firewall-client
+  MEMORY_FIREWALL_URL: ${MEMORY_FIREWALL_URL:-http://memory-firewall:8300}
+  MEMORY_FIREWALL_API_KEY: ${MEMORY_FIREWALL_API_KEY:-dev-memory-firewall-key-change-me}
+
 services:
   postgres:
     image: postgres:16-alpine
@@ -128,7 +134,7 @@ services:
         --plugin-dir /app/gateway-plugins --write /bootstrap/cp.env &&
         exec python -m app.serve
     environment:
-      <<: [*db-env, *internal-token]
+      <<: [*db-env, *internal-token, *memory-firewall-client]
       REDIS_URL: redis://redis:6379/0
       REVIEW_ENCRYPTION_KEY: ${REVIEW_ENCRYPTION_KEY:-3I97CCypg5ohqkex3CUIufgPsrgqRPIUcq3r-pZjgdg=}
       TWO_PERSON_ENVIRONMENTS: '["production"]'
@@ -160,7 +166,7 @@ services:
   guardrail-gateway:
     build: *gateway-build
     environment:
-      <<: [*db-env, *internal-token]
+      <<: [*db-env, *internal-token, *memory-firewall-client]
       GATEWAY_ENV: dev
       GATEWAY_ID: gateway-dev-1
       OPA_URL: http://opa:8181
@@ -216,6 +222,25 @@ services:
       timeout: 3s
       retries: 30
 
+  # Memory Firewall (docs/memory-firewall.md): the library vendored in services/memory-firewall/vendor
+  # behind an HTTP adapter. The `memory-firewall` guardrail is installed but not assigned by default.
+  memory-firewall:
+    build:
+      context: ./services/memory-firewall
+    environment:
+      MEMORY_FIREWALL_API_KEY: ${MEMORY_FIREWALL_API_KEY:-dev-memory-firewall-key-change-me}
+      MEMORY_FIREWALL_TRUSTED_SOURCES: ${MEMORY_FIREWALL_TRUSTED_SOURCES:-["system","user"]}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    volumes:
+      - memory_firewall_data:/var/lib/memory-firewall   # signing keys + event log: keep it off agents' storage
+    ports:
+      - "8300:8300"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8300/ready')"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+
   # Demo MCP server for the discovery `mcp` connector: `docker compose --profile discovery-demo up -d`.
   # Edit examples/discovery/tools.json to simulate a changed tool definition.
   mcp-demo:
@@ -229,3 +254,4 @@ volumes:
   postgres_data:
   bootstrap:
   gateway_cache:
+  memory_firewall_data:

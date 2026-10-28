@@ -20,7 +20,7 @@ from guardrail_sdk.tls import ClientTLS
 
 from .api import errors
 from .api.container import Container
-from .api.routers import catalog, health, internal, inventory, operations, pipeline
+from .api.routers import catalog, health, internal, inventory, memory_firewall, operations, pipeline
 from .config import Settings, get_settings
 from .db.session import make_engine, make_sessionmaker
 from .domain.crypto import PayloadCipher
@@ -103,6 +103,9 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
         discovery_max_observations=settings.discovery_max_observations,
         playground_environments=frozenset(settings.playground_environments),
         playground_gateway_urls=settings.playground_gateway_urls,
+        memory_firewall_url=settings.memory_firewall_url,
+        memory_firewall_api_key=settings.memory_firewall_api_key,
+        memory_firewall_selftest_timeout=settings.memory_firewall_selftest_timeout_seconds,
     )
     logger.info("control plane ready (two-person: %s)", ",".join(settings.two_person_environments) or "none")
     tasks = [asyncio.create_task(refresh_loop(app.state.container.ctx), name="metrics")]
@@ -140,7 +143,7 @@ def create_app(settings: Settings | None = None, container: Container | None = N
     errors.register(app)
     app.middleware("http")(_security_headers)
     app.include_router(health.router)
-    for r in (catalog.router, pipeline.router, operations.router, internal.router):
+    for r in (catalog.router, pipeline.router, operations.router, memory_firewall.router, internal.router):
         app.include_router(r, prefix=API_PREFIX)
     app.include_router(inventory.router, prefix=INVENTORY_PREFIX)
     _mount_console(app, Path(settings.console_dir))

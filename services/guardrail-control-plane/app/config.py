@@ -38,6 +38,14 @@ class Settings(BaseSettings):
     playground_environments: list[str] = Field(default_factory=list, alias="PLAYGROUND_ENVIRONMENTS")
     playground_gateway_urls: dict[str, str] = Field(default_factory=dict, alias="PLAYGROUND_GATEWAY_URLS")
 
+    # Memory Firewall service (services/memory-firewall): status, event log, inspect/scan and the
+    # checkpoint self-test on the console's Memory Firewall page. Unset = the page is hidden.
+    memory_firewall_url: str | None = Field(None, alias="MEMORY_FIREWALL_URL")
+    memory_firewall_api_key: str | None = Field(None, alias="MEMORY_FIREWALL_API_KEY")
+    memory_firewall_selftest_timeout_seconds: float = Field(
+        150.0, gt=0, alias="MEMORY_FIREWALL_SELFTEST_TIMEOUT_SECONDS"
+    )
+
     # Optional read-only DSN for analytics over the gateway's audit schema
     audit_dsn: str | None = Field(None, alias="AUDIT_DSN")
 

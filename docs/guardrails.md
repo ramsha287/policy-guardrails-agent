@@ -19,6 +19,7 @@ the decision table; see [architecture.md](architecture.md#one-request-step-by-st
 | **[`prompt-injection`](#prompt-injection-instructions-hidden-in-content)** | Instructions hidden in user input, retrieved documents and tool results (heuristic) | input, retrieval, tool | **Available.** Shadow in dev; measure before enforcing |
 | **[`topic-limits`](#topic-limits-what-the-agent-is-for)** | Denied topics, and requests outside what the agent is for | input, output | **Available.** Needs your topic lists |
 | **[`content-moderation`](#content-moderation-harmful-content)** | Harassment, hate, violence, self-harm, sexual content, via an OpenAI-compatible moderation endpoint | input, output | **Available.** Needs an endpoint and key |
+| **[`memory-firewall`](#memory-firewall-trusted-agent-memory)** | Retrieved agent memory: is the writer authorized, the source trusted, the text free of injected instructions? Checked by the **Memory Firewall** service | retrieval | **Available.** Needs the Memory Firewall service; not assigned by default |
 | [`noop`](#noop-the-template) | Nothing (always allows) | every stage | Available. A template and engine smoke test, not a real control |
 | [Grounding, tool argument rules, step limits, …](#guardrails-not-built-yet) | Other checks | your choice | **Planned.** The platform is ready for them |
 
@@ -284,6 +285,37 @@ point the key at another host: `MODERATION_BASE_URL` (default `https://api.opena
 pieces and every piece is moderated. It is `fail_closed` by default (an unreachable endpoint, or a
 payload too large to moderate in full, blocks); override per assignment if an outage of the
 moderation service shouldn't stop traffic.
+
+## `memory-firewall`: trusted agent memory
+
+Remote guardrail backed by `services/memory-firewall` (the Memory Firewall library behind an HTTP
+adapter). At the **retrieval** stage it sends every non-blank chunk, with its provenance, to
+`POST /v1/memory/inspect` and acts on the answer:
+
+| Check (by the library) | Quarantined or flagged when | Finding |
+| --- | --- | --- |
+| Authorized-writer gate | the chunk's writer doesn't match `authorized_writers` | `MEMORY_QUARANTINED` |
+| Per-source trust | the source label isn't trusted (default trusted: `system`, `user`; `tool`, `web` and unlabeled are not) | `MEMORY_QUARANTINED` |
+| Scan (optional) | instruction-like text ("ignore previous instructions", "always approve", …) | `MEMORY_INJECTION_TEXT` |
+
+Labels come from the chunk: `metadata.source_type` (else `chunk.source` when it is one of the four
+labels, else `default_source`, else `unlabeled`) and `metadata.writer` (else `unknown`). Chunk ids
+are sent as `<tenant>/<agent>/<chunk id>`.
+
+| Setting | Default | Meaning |
+| --- | --- | --- |
+| `source_field`, `writer_field` | `source_type`, `writer` | Chunk metadata keys |
+| `default_source` | `null` | Label for chunks without one (`null` = untrusted) |
+| `authorized_writers` | `null` | Glob patterns; `null` turns the writer gate off |
+| `scan_text` | `true` | Also run the injection-text scan |
+| `on_quarantine` | `drop_chunk` | `drop_chunk` (MODIFY), `escalate`, `block` |
+| `on_injection_text` | `drop_chunk` | `drop_chunk`, `escalate`, `block`, `allow` (findings only) |
+
+`failure_mode` is `fail_closed`: if the service is down, the request is blocked. The service URL
+and key are operator settings (`MEMORY_FIREWALL_URL`, `MEMORY_FIREWALL_API_KEY`). The guardrail is
+installed in the gateway image and registered with the control plane, but no snapshot assigns it:
+add it on the **Pipeline** page, in shadow first. Integration, API and limits:
+[memory-firewall.md](memory-firewall.md).
 
 ## `noop`: the template
 

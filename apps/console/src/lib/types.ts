@@ -33,7 +33,95 @@ export interface Me {
   two_person_environments: Environment[];
   review_ttl_minutes: number;
   /** `playground` lists the environments where the console may send real agent requests. */
-  features: { simulate: boolean; analytics: boolean; discovery?: boolean; decisions?: boolean; playground?: Environment[] };
+  features: {
+    simulate: boolean;
+    analytics: boolean;
+    discovery?: boolean;
+    decisions?: boolean;
+    playground?: Environment[];
+    /** services/memory-firewall is configured (MEMORY_FIREWALL_URL). Absent before 0.12. */
+    memory_firewall?: boolean;
+  };
+}
+
+// ---- Memory Firewall (services/memory-firewall, relayed by /cp/v1/memory-firewall) ----------------
+
+export interface MemoryFirewallService {
+  service: string;
+  version: string;
+  library_version: string;
+  /** First 16 hex chars of SHA-256 over the current Ed25519 public key. */
+  key_id: string;
+  trusted_sources: string[];
+  sources: string[];
+  mitre_technique: string;
+  injection_patterns: number;
+  uptime_seconds: number;
+  counters: {
+    admitted: number;
+    quarantined: number;
+    scan_flagged: number;
+    provenance_records: number;
+    provenance_coverage: number;
+  };
+  last_selftest: Pick<SelfTestResult, "passed" | "finished_at" | "duration_ms" | "guard_blocked" | "attacks"> | null;
+}
+
+export interface MemoryFirewallStatus {
+  configured: boolean;
+  reachable: boolean;
+  ready: boolean;
+  url?: string;
+  latency_ms?: number;
+  error?: string;
+  service?: MemoryFirewallService;
+}
+
+export interface MemoryItem {
+  id: string;
+  text: string;
+  source: string;
+  writer: string;
+  authorized: boolean;
+}
+
+export interface MemoryVerdict {
+  id: string;
+  source: string;
+  writer: string;
+  admitted: boolean;
+  quarantine_reason: string | null;
+  scan_findings: string[];
+  signature: string | null;
+}
+
+export interface InspectResult {
+  results: MemoryVerdict[];
+  summary: { items: number; admitted: number; quarantined: number; scan_flagged: number };
+  key_id: string;
+}
+
+export interface MemoryEvent {
+  event: "write" | "load" | "reject" | "quarantine" | string;
+  /** The library's field names: thread_id holds the writer (write) or the source (reject). */
+  thread_id: string;
+  checkpoint_id?: string;
+  checkpoint_ns?: string;
+  reason?: string;
+  mitre?: string;
+  ts: string;
+}
+
+export type AttackOutcome = "SUCCEEDED" | "DETECTED" | "NO_EFFECT" | "N/A";
+
+export interface SelfTestResult {
+  modes: string[];
+  results: { attack: string; mode: string; control: string; tampered: string; result: AttackOutcome }[];
+  attacks: number;
+  guard_blocked: number;
+  passed: boolean;
+  finished_at: string;
+  duration_ms: number;
 }
 
 export const DATA_CLASSES = ["PUBLIC", "INTERNAL", "CONFIDENTIAL", "PII"] as const;

@@ -1,0 +1,13 @@
+fastapi>=0.115
+uvicorn[standard]>=0.30
+pydantic>=2.6
+pydantic-settings>=2.3
+# Runtime dependencies of the Memory Firewall modules this service loads (guard, scan, lab),
+# pinned to the versions in the memory-firewall repository's uv.lock. The library's other
+# dependencies (chromadb, datasets, scikit-learn, streamlit) serve its vector-DB experiments and
+# demos, which this service does not run.
+langgraph==1.2.14
+langgraph-checkpoint==4.2.0
+langgraph-checkpoint-sqlite==3.1.1
+cryptography==50.0.2
+pycryptodome==3.24.1

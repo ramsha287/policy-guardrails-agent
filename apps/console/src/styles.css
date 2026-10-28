@@ -1423,3 +1423,22 @@ button.stat:focus-visible {
   max-height: 180px;
   overflow: auto;
 }
+
+/* ---- memory firewall ----------------------------------------------------------------------------- */
+
+.memory-item {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 12px 14px 8px;
+  margin: 0;
+  min-width: 0;
+  background: var(--surface-2);
+}
+
+.memory-item .textarea {
+  min-height: 56px;
+}
+
+.memory-item-footer {
+  justify-content: space-between;
+}

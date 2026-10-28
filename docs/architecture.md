@@ -7,51 +7,72 @@ the [status table](#what-is-built-and-how-well-it-is-tested) says how.
 ## Components
 
 ```mermaid
-%%{init: {"theme": "base", "themeVariables": {"primaryTextColor": "#0f172a", "lineColor": "#475569", "clusterBkg": "#f8fafc", "clusterBorder": "#cbd5e1", "edgeLabelBackground": "#ffffff"}}}%%
-flowchart LR
-  subgraph Agents
-    A1[AI agent<br/>SDK hooks / LangGraph / CrewAI]
-    A2[OpenAI client<br/>proxy mode]
-    A3[AuthZEN PEP<br/>API gateway, MCP server]
+%%{init: {"theme": "base", "fontFamily": "Helvetica, Arial, sans-serif", "themeVariables": {"fontSize": "14px", "primaryTextColor": "#0f172a", "lineColor": "#64748b", "clusterBkg": "#fbfcfe", "clusterBorder": "#e2e8f0", "edgeLabelBackground": "#ffffff"}, "flowchart": {"curve": "basis", "nodeSpacing": 28, "rankSpacing": 48}}}%%
+flowchart TB
+  subgraph Clients["Clients"]
+    direction LR
+    A1["AI agent<br/>SDK hooks · LangGraph · CrewAI"]
+    A2["OpenAI client<br/>proxy mode"]
+    A3["AuthZEN PEP<br/>API gateway · MCP server"]
+    OP["Operators, reviewers<br/>console in a browser"]
   end
-  subgraph People
-    OP[Operators, reviewers<br/>browser]
+
+  subgraph Platform["Guardrail platform"]
+    direction LR
+    GW["Guardrail gateway · :8100<br/>identity · descriptors · session · risk v2<br/>OPA · guardrail engine · advisors<br/>decision table · verification · audit"]
+    CP["Control plane · :8200<br/>catalog · registry · snapshots · publish<br/>review queue · discovery and inventory<br/>analytics · decision log · playground<br/>Memory Firewall relay · console"]
+  end
+
+  subgraph Services["Guardrail services"]
+    direction LR
+    OPA["OPA · :8181<br/>authz.rego"]
+    AIG["AI Gateway<br/>project-service :8000<br/>instant-redaction :8001 (Presidio)"]
+    MFW["Memory Firewall · :8300<br/>adapter over the unmodified library<br/>VectorGuard · scan · GuardedSaver self-test"]
+  end
+
+  subgraph Data["Data"]
+    direction LR
+    PG[("Postgres<br/>guardrail · audit<br/>control · inventory")]
+    R[("Redis<br/>sessions · config push<br/>events")]
+    MFD[("memory_firewall_data<br/>Ed25519 keys<br/>events.jsonl")]
+  end
+
+  subgraph External["External, optional"]
+    direction LR
+    SRC["Discovery sources<br/>audit log · Kubernetes · DNS logs<br/>OpenAI Admin · Bedrock · MCP"]
+    MOD["Moderation endpoint"]
+    ADV["Hosted classifier"]
   end
 
   A1 & A2 & A3 -- "gk_ key" --> GW
   OP -- "cpk_ key" --> CP
-
-  subgraph Platform
-    GW["Guardrail gateway :8100<br/>identity · descriptors · session · risk v2<br/>OPA · guardrail engine · advisors<br/>decision table · verification · audit"]
-    OPA[OPA<br/>authz.rego]
-    CP["Control plane :8200<br/>catalog · registry · snapshots · publish<br/>review queue · discovery & inventory<br/>analytics · decision log · playground<br/>console at /console"]
-    AIG["AI Gateway<br/>project-service :8000<br/>instant-redaction :8001 (Presidio)"]
-    PG[(Postgres<br/>guardrail · audit · control · inventory)]
-    R[(Redis<br/>sessions · config push · events)]
-  end
-
-  GW -- policy query --> OPA
+  GW <-- "snapshot + catalog (ETag poll, Redis push)<br/>heartbeat · file review · simulate" --> CP
+  GW -- "policy query" --> OPA
   GW -- "ai-gateway-pii" --> AIG
-  GW -- "snapshot + catalog (ETag poll, Redis push)<br/>heartbeat · file review" --> CP
-  CP -- "simulate · playground" --> GW
+  GW -- "memory-firewall (retrieval)" --> MFW
+  CP -- "status · events · inspect · self-test" --> MFW
   GW -- "audit rows + outbox" --> PG
-  CP -- "config, reviews, inventory" --> PG
-  CP -- "AUDIT_DSN: analytics, decision log,<br/>gateway connector, advisor labels" --> PG
+  CP -- "config · reviews · inventory · AUDIT_DSN" --> PG
   GW <--> R
   CP --> R
-  CP -- "discovery connectors (read-only)" --> SRC[Audit log · Kubernetes · DNS logs<br/>OpenAI Admin · Bedrock/AgentCore · MCP servers]
-  GW -- "content-moderation (optional)" --> MOD[Moderation endpoint]
-  GW -- "advisors http/bedrock (optional, opt-in per tenant)" --> ADV[Hosted classifier]
+  MFW --> MFD
+  CP -. "read-only connectors" .-> SRC
+  GW -. "content-moderation" .-> MOD
+  GW -. "advisors http/bedrock" .-> ADV
 
-  classDef client fill:#f1f5f9,stroke:#94a3b8,color:#0f172a
-  classDef service fill:#eff6ff,stroke:#3b82f6,color:#0f172a
-  classDef aigw fill:#ecfdf5,stroke:#059669,stroke-width:3px,color:#064e3b
-  classDef store fill:#f1f5f9,stroke:#64748b,color:#0f172a
-  classDef external fill:#ffffff,stroke:#94a3b8,stroke-dasharray:5 4,color:#334155
+  classDef client fill:#f5f3ff,stroke:#a78bfa,stroke-width:1px,color:#1e1b4b
+  classDef edge fill:#eff6ff,stroke:#60a5fa,stroke-width:1.5px,color:#0f172a
+  classDef control fill:#f0fdfa,stroke:#2dd4bf,stroke-width:1.5px,color:#0f172a
+  classDef guard fill:#f0fdf4,stroke:#4ade80,stroke-width:1.5px,color:#052e16
+  classDef mfw fill:#ecfdf5,stroke:#059669,stroke-width:2px,color:#052e16
+  classDef store fill:#f8fafc,stroke:#94a3b8,stroke-width:1px,color:#0f172a
+  classDef external fill:#ffffff,stroke:#cbd5e1,stroke-width:1px,stroke-dasharray:4 3,color:#334155
   class A1,A2,A3,OP client
-  class GW,CP service
-  class AIG aigw
-  class OPA,PG,R store
+  class GW edge
+  class CP control
+  class OPA,AIG guard
+  class MFW mfw
+  class PG,R,MFD store
   class SRC,MOD,ADV external
 ```
 
@@ -59,11 +80,12 @@ flowchart LR
 | --- | --- | --- |
 | **Guardrail gateway** | `services/guardrail-gateway` | The agent-facing API. Every decision is made here, in one function (`app/gateway/flow.py: run_stage`) shared by `/v1/guard/{stage}`, proxy mode and AuthZEN |
 | **OPA** | `policies/guardrails/authz.rego` | Whether the action is allowed at all (trust, risk, tools, delegation depth, required guardrails) |
-| **Guardrail plugins** | `app/plugins/` | Content checks: `ai-gateway-pii`, `secrets`, `prompt-injection`, `topic-limits`, `content-moderation`, `noop` |
+| **Guardrail plugins** | `app/plugins/` | Content checks: `ai-gateway-pii`, `secrets`, `prompt-injection`, `topic-limits`, `content-moderation`, `memory-firewall`, `noop` |
 | **Advisors** | `app/advise/` | Optional classifiers for the uncertain risk band; can only tighten |
 | **Control plane** | `services/guardrail-control-plane` | Source of truth for configuration and people's decisions: tenants, keys, agents, actions, guardrail registry, snapshots, publish approvals, review queue, discovery and inventory, admin keys, change log |
 | **Console** | `apps/console` | React app served by the control plane at `/console`. Talks only to `/cp/v1` and `/inv/v1` |
 | **AI Gateway** | `services/ai-gateway` | The existing PII redaction service (Presidio) behind `ai-gateway-pii` |
+| **Memory Firewall** | `services/memory-firewall` | HTTP adapter around the unmodified Memory Firewall library: per-memory writer gate and source trust (`VectorGuard`), injection-text scan, signed provenance, event log, checkpoint self-test. Behind the `memory-firewall` guardrail and the console's Memory Firewall page |
 | **SDK** | `packages/guardrail-sdk` | Agent client and hooks, framework integrations, the plugin contract, conformance and evaluation tools, shared documents |
 | **Helm chart** | `deploy/helm/guardrail-platform` | Kubernetes/k3s install with NetworkPolicies, alerts and a dashboard |
 
@@ -73,7 +95,7 @@ An agent calls `POST /v1/guard/{input|retrieval|tool|output}` with its gateway k
 sends a prompt, uses retrieved text, runs (or reads the result of) a tool, or returns an answer.
 
 ```mermaid
-%%{init: {"theme": "base", "themeVariables": {"primaryTextColor": "#0f172a", "actorBkg": "#eff6ff", "actorBorder": "#3b82f6", "actorTextColor": "#0f172a", "actorLineColor": "#94a3b8", "signalColor": "#475569", "signalTextColor": "#0f172a", "labelBoxBkgColor": "#fef3c7", "labelBoxBorderColor": "#d97706", "labelTextColor": "#78350f", "loopTextColor": "#78350f", "altSectionBkgColor": "#f8fafc", "sequenceNumberColor": "#ffffff", "noteBkgColor": "#ecfdf5", "noteBorderColor": "#059669"}}}%%
+%%{init: {"theme": "base", "fontFamily": "Helvetica, Arial, sans-serif", "themeVariables": {"fontSize": "14px", "primaryTextColor": "#0f172a", "actorBkg": "#eff6ff", "actorBorder": "#60a5fa", "actorTextColor": "#0f172a", "actorLineColor": "#cbd5e1", "signalColor": "#64748b", "signalTextColor": "#0f172a", "labelBoxBkgColor": "#f5f3ff", "labelBoxBorderColor": "#a78bfa", "labelTextColor": "#1e1b4b", "loopTextColor": "#1e1b4b", "altSectionBkgColor": "#fbfcfe", "noteBkgColor": "#f0fdf4", "noteBorderColor": "#4ade80", "noteTextColor": "#052e16", "activationBkgColor": "#f0fdfa", "activationBorderColor": "#2dd4bf", "sequenceNumberColor": "#ffffff"}}}%%
 sequenceDiagram
   autonumber
   participant Ag as Agent
@@ -84,7 +106,7 @@ sequenceDiagram
   participant Adv as Advisors
   participant CP as Control plane
   participant DB as Audit log
-  Ag->>GW: POST /v1/guard/tool (gk_ key, agent, action, session, payload)
+  Ag->>GW: POST /v1/guard/{stage} (gk_ key, agent, action, session, payload)
   GW->>GW: auth + rate limit, normalise text, build context (trust, inherent risk)
   GW->>GW: identity binding (bound key must match agent_id)
   GW->>S: session view (taint, labels, denials, targets, baselines)
@@ -92,6 +114,7 @@ sequenceDiagram
   GW->>O: policy input (scores, tool, classification, identity, descriptor, session, risk)
   O-->>GW: allow / deny + obligations
   GW->>G: run assigned guardrails in order (shadow ones only recorded)
+  Note over G: local plugins in-process, remote ones call<br/>AI Gateway (PII) and Memory Firewall (retrieved memory)
   G-->>GW: allow / modify / block / escalate
   GW->>Adv: only if band is elevated or high and nothing blocked
   Adv-->>GW: capped points / verify request (enforce mode) or shadow record
@@ -141,24 +164,90 @@ sequenceDiagram
     raw payload text is never stored. With `OUTBOX_SINKS`, a `decision.made.v1` event is written in
     the same transaction.
 
+## The Memory Firewall path
+
+The Memory Firewall library is vendored, byte for byte, in `services/memory-firewall/vendor`
+(checked against `SHA256SUMS` by a test), and `services/memory-firewall/app/firewall.py` is the only
+code that imports it. Agents' retrieved memory reaches it through the gateway; people reach it
+through the control plane.
+
+```mermaid
+%%{init: {"theme": "base", "fontFamily": "Helvetica, Arial, sans-serif", "themeVariables": {"fontSize": "14px", "primaryTextColor": "#0f172a", "lineColor": "#64748b", "clusterBkg": "#fbfcfe", "clusterBorder": "#e2e8f0", "edgeLabelBackground": "#ffffff"}, "flowchart": {"curve": "basis", "nodeSpacing": 36, "rankSpacing": 56}}}%%
+flowchart LR
+  AG["Agent<br/>retrieval hook"] -- "POST /v1/guard/retrieval<br/>chunks + metadata.source_type, writer" --> GW
+
+  subgraph Gateway["Guardrail gateway"]
+    GW["Guardrail engine"] --> PL["memory-firewall plugin<br/>labels · ids · writer gate patterns"]
+  end
+
+  subgraph MF["services/memory-firewall · :8300"]
+    direction TB
+    API["FastAPI adapter<br/>X-API-Key · limits · errors"] --> FW["firewall.py<br/>integration boundary"]
+    FW --> LIB["Memory Firewall library<br/>vendor/ · verbatim @ 807b972<br/>guard.vector_guard · guard.keys · guard.events<br/>scan.scanner · lab.tamper (self-test)"]
+  end
+
+  PL -- "POST /v1/memory/inspect" --> API
+  CP["Control plane<br/>/cp/v1/memory-firewall/*"] -- "status · events · inspect · scan · self-test" --> API
+  UI["Console<br/>Memory Firewall page"] -- "cpk_ key" --> CP
+  LIB --> KEYS[("Data volume<br/>Ed25519 keys · events.jsonl<br/>selftest scratch DBs")]
+  PL -. "drop · hold · block<br/>findings: MEMORY_QUARANTINED<br/>MEMORY_INJECTION_TEXT" .-> GW
+
+  classDef client fill:#f5f3ff,stroke:#a78bfa,stroke-width:1px,color:#1e1b4b
+  classDef edge fill:#eff6ff,stroke:#60a5fa,stroke-width:1.5px,color:#0f172a
+  classDef control fill:#f0fdfa,stroke:#2dd4bf,stroke-width:1.5px,color:#0f172a
+  classDef guard fill:#f0fdf4,stroke:#4ade80,stroke-width:1.5px,color:#052e16
+  classDef mfw fill:#ecfdf5,stroke:#059669,stroke-width:2px,color:#052e16
+  classDef store fill:#f8fafc,stroke:#94a3b8,stroke-width:1px,color:#0f172a
+  classDef external fill:#ffffff,stroke:#cbd5e1,stroke-width:1px,stroke-dasharray:4 3,color:#334155
+  classDef finding fill:#fffbeb,stroke:#fbbf24,stroke-width:1px,color:#78350f
+  class AG,UI client
+  class GW,PL edge
+  class CP control
+  class API,FW guard
+  class LIB mfw
+  class KEYS store
+```
+
+1. The agent sends retrieved memory to `POST /v1/guard/retrieval` like any other chunks.
+2. If an assignment includes `memory-firewall`, the plugin labels each chunk (source, writer,
+   authorized) and calls `POST /v1/memory/inspect` once per request.
+3. The adapter calls `VectorGuard.admit` per chunk (writer gate, then source trust; admitted
+   memory is signed into a provenance record) and `scan_text` when the scan is on. Every write,
+   rejection and quarantine is appended to `events.jsonl` with MITRE ATLAS `AML.T0080`, with ids
+   and reasons only.
+4. The plugin drops, holds or blocks per its config; the engine combines it with the other
+   guardrails (strongest wins) and the audit row records the findings' types and locations.
+5. The service being down is a guardrail error: with `fail_closed` (the default) the request is
+   blocked.
+
+The console's page reads `/cp/v1/memory-firewall/status` (never fails: an unreachable service is
+a state), the event log, and can run checks and the checkpoint self-test, which executes the
+library's `lab.tamper.ATTACKS` in a subprocess against scratch databases. Details:
+[memory-firewall.md](memory-firewall.md).
+
 ## Configuration flow
 
 ```mermaid
-%%{init: {"theme": "base", "themeVariables": {"primaryTextColor": "#0f172a", "lineColor": "#475569", "edgeLabelBackground": "#ffffff"}}}%%
+%%{init: {"theme": "base", "fontFamily": "Helvetica, Arial, sans-serif", "themeVariables": {"fontSize": "14px", "primaryTextColor": "#0f172a", "lineColor": "#64748b", "clusterBkg": "#fbfcfe", "clusterBorder": "#e2e8f0", "edgeLabelBackground": "#ffffff"}, "flowchart": {"curve": "basis", "nodeSpacing": 36, "rankSpacing": 56}}}%%
 flowchart LR
-  E[Editor: Pipeline / Tenants & keys] -->|working set| CP[Control plane]
-  CP -->|publish: compile + validate| S[(Snapshot vN<br/>immutable)]
-  CP -->|production: second admin approves| S
-  CP -->|catalog change: automatic| C[(Catalog vN<br/>tenants, key hashes, agents,<br/>actions, inventory flags)]
-  S & C -->|Redis push + ETag poll 30 s| GW[Gateways]
-  GW -->|disk cache| GW
-  GW -->|heartbeat: installed guardrails,<br/>versions, capabilities| CP
+  E["Editor<br/>Pipeline · Tenants & keys"] -- "working set" --> CP["Control plane"]
+  CP -- "publish: compile + validate<br/>production: second admin approves" --> S[("Snapshot vN<br/>immutable")]
+  CP -- "catalog change: automatic" --> C[("Catalog vN<br/>tenants · key hashes · agents<br/>actions · inventory flags")]
+  S & C -- "Redis push + ETag poll 30 s" --> GW["Gateways"]
+  GW -- "disk cache" --> GW
+  GW -- "heartbeat: installed guardrails<br/>versions · capabilities" --> CP
 
-  classDef client fill:#f1f5f9,stroke:#94a3b8,color:#0f172a
-  classDef service fill:#eff6ff,stroke:#3b82f6,color:#0f172a
-  classDef store fill:#f1f5f9,stroke:#64748b,color:#0f172a
+  classDef client fill:#f5f3ff,stroke:#a78bfa,stroke-width:1px,color:#1e1b4b
+  classDef edge fill:#eff6ff,stroke:#60a5fa,stroke-width:1.5px,color:#0f172a
+  classDef control fill:#f0fdfa,stroke:#2dd4bf,stroke-width:1.5px,color:#0f172a
+  classDef guard fill:#f0fdf4,stroke:#4ade80,stroke-width:1.5px,color:#052e16
+  classDef mfw fill:#ecfdf5,stroke:#059669,stroke-width:2px,color:#052e16
+  classDef store fill:#f8fafc,stroke:#94a3b8,stroke-width:1px,color:#0f172a
+  classDef external fill:#ffffff,stroke:#cbd5e1,stroke-width:1px,stroke-dasharray:4 3,color:#334155
+  classDef finding fill:#fffbeb,stroke:#fbbf24,stroke-width:1px,color:#78350f
   class E client
-  class CP,GW service
+  class CP control
+  class GW edge
   class S,C store
 ```
 
@@ -183,20 +272,26 @@ flowchart LR
 ## Discovery feeds risk
 
 ```mermaid
-%%{init: {"theme": "base", "themeVariables": {"primaryTextColor": "#0f172a", "lineColor": "#475569", "edgeLabelBackground": "#ffffff"}}}%%
+%%{init: {"theme": "base", "fontFamily": "Helvetica, Arial, sans-serif", "themeVariables": {"fontSize": "14px", "primaryTextColor": "#0f172a", "lineColor": "#64748b", "clusterBkg": "#fbfcfe", "clusterBorder": "#e2e8f0", "edgeLabelBackground": "#ffffff"}, "flowchart": {"curve": "basis", "nodeSpacing": 36, "rankSpacing": 56}}}%%
 flowchart LR
-  K[Connectors<br/>gateway · kubernetes · dns_log<br/>openai_admin · aws_bedrock · mcp] --> O[Observations]
-  O --> E[Entities<br/>merged by strong keys] --> CL[Classification<br/>confirmed / probable / not agent]
-  CL --> RC[Reconcile with the registry<br/>managed · registered_unmanaged · shadow · stale]
-  RC --> F[Findings<br/>shadow_agent · unmanaged_agent · stale_agent<br/>tool_definition_changed]
-  F -->|catalog: open_findings, flagged_tools| GW[Gateway risk:<br/>AGENT_FINDING +20<br/>TOOL_DEFINITION_CHANGED +25]
+  K["Connectors<br/>gateway · kubernetes · dns_log<br/>openai_admin · aws_bedrock · mcp"] --> O["Observations"]
+  O --> E["Entities<br/>merged by strong keys"] --> CL["Classification<br/>confirmed · probable · not agent"]
+  CL --> RC["Reconcile with the registry<br/>managed · registered_unmanaged · shadow · stale"]
+  RC --> F["Findings<br/>shadow_agent · unmanaged_agent · stale_agent<br/>tool_definition_changed"]
+  F -- "catalog: open_findings, flagged_tools" --> GW["Gateway risk<br/>AGENT_FINDING +20<br/>TOOL_DEFINITION_CHANGED +25"]
 
-  classDef client fill:#f1f5f9,stroke:#94a3b8,color:#0f172a
-  classDef service fill:#eff6ff,stroke:#3b82f6,color:#0f172a
-  classDef finding fill:#fef3c7,stroke:#d97706,color:#78350f
-  class K client
-  class O,E,CL,RC,GW service
+  classDef client fill:#f5f3ff,stroke:#a78bfa,stroke-width:1px,color:#1e1b4b
+  classDef edge fill:#eff6ff,stroke:#60a5fa,stroke-width:1.5px,color:#0f172a
+  classDef control fill:#f0fdfa,stroke:#2dd4bf,stroke-width:1.5px,color:#0f172a
+  classDef guard fill:#f0fdf4,stroke:#4ade80,stroke-width:1.5px,color:#052e16
+  classDef mfw fill:#ecfdf5,stroke:#059669,stroke-width:2px,color:#052e16
+  classDef store fill:#f8fafc,stroke:#94a3b8,stroke-width:1px,color:#0f172a
+  classDef external fill:#ffffff,stroke:#cbd5e1,stroke-width:1px,stroke-dasharray:4 3,color:#334155
+  classDef finding fill:#fffbeb,stroke:#fbbf24,stroke-width:1px,color:#78350f
+  class K external
+  class O,E,CL,RC control
   class F finding
+  class GW edge
 ```
 
 Connectors are read-only (list APIs, one audit query, MCP `tools/list` only). An MCP tool's
@@ -247,6 +342,7 @@ the Docker Compose stack). *Partial* means it works but has a gap listed next to
 | Review queue loop (hold → decide → agent poll) | Implemented, tested | `test_services.py`, `test_api.py`, live `test_security_flows.py`, console smoke |
 | Advisors: local model, panel rules, calibration | Implemented, tested | `test_advisors.py`, `test_calibrate.py`, live exfiltration flow. Local weights are hand-set until calibrated |
 | Advisors: `http` and `bedrock` providers | Partial | Contract tests with stubs; not run against a real endpoint or Bedrock |
+| Memory Firewall service, `memory-firewall` guardrail, console page | Implemented, tested | `services/memory-firewall/tests` (real library, incl. the five checkpoint attacks), gateway and control-plane `test_memory_firewall.py`, console vitest + smoke on the mock. Not in the Helm chart; not in the live e2e suites |
 | AuthZEN API | Implemented, tested | `test_authzen.py`, `test_api.py` |
 | Decision events (outbox → Redis/webhook), audit hash chain | Implemented, tested | `test_outbox.py`, `integration/test_postgres.py` |
 | Control plane: catalog, registry, publish, two-person approval, rollback, RBAC | Implemented, tested | `test_services.py` (memory + Postgres), `test_api.py`, `tests/e2e/test_control_plane.py` (live) |

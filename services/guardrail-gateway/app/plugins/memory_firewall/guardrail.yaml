@@ -1,0 +1,47 @@
+# Retrieved agent memory checked by the Memory Firewall service (services/memory-firewall).
+id: memory-firewall
+version: 1.0.0
+kind: remote
+description: >
+  Agent memory may only be used when its writer is authorized and its source is trusted. Each
+  retrieved chunk's provenance (source label and writer, from the chunk's metadata) is checked by
+  the Memory Firewall service: unauthorized writers and untrusted sources (tool, web, unlabeled)
+  are quarantined, admitted memory gets a signed provenance record, and the optional scan flags
+  instruction-like text. Quarantined or flagged chunks are dropped by default.
+owner: ai-security
+data_handling: >
+  Sends each retrieved chunk's id, text, source label and writer to the in-cluster memory-firewall
+  service (MEMORY_FIREWALL_URL). The service stores signed provenance records (id, source, writer)
+  in memory and an event log of ids and reasons; it never stores or logs the text. Findings carry
+  the chunk location and the heuristic's name only.
+stages: [retrieval]
+decisions_emitted: [allow, modify, escalate, block]
+failure_mode: fail_closed
+latency_budget_ms: 100
+capabilities:
+  emits_modify: true
+  needs_raw_payload: true
+  parallel_safe: false
+  supports_batch: true
+  max_payload_kb: 1024
+entrypoint: app.plugins.memory_firewall.guardrail:MemoryFirewallGuardrail
+remote:
+  endpoint: http://memory-firewall:8300   # operator override: MEMORY_FIREWALL_URL
+  auth: api_key
+  api_key_ref: env://MEMORY_FIREWALL_API_KEY
+  timeout_ms: 800
+config_schema:
+  type: object
+  additionalProperties: false
+  properties:
+    source_field: {type: string, default: source_type, description: chunk metadata key holding system/user/tool/web}
+    writer_field: {type: string, default: writer, description: chunk metadata key naming who wrote the memory}
+    default_source: {enum: [system, user, tool, web, null], default: null, description: label for chunks without one (null = unlabeled, which is untrusted)}
+    authorized_writers:
+      type: [array, "null"]
+      items: {type: string}
+      default: null
+      description: glob patterns of writers allowed to write memory; null turns the writer gate off
+    scan_text: {type: boolean, default: true}
+    on_quarantine: {enum: [drop_chunk, escalate, block], default: drop_chunk}
+    on_injection_text: {enum: [drop_chunk, escalate, block, allow], default: drop_chunk}

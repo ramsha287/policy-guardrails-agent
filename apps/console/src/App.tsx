@@ -18,6 +18,7 @@ import { ConnectorsPage } from "./pages/Connectors";
 import { FleetPage } from "./pages/Fleet";
 import { GuardrailsPage } from "./pages/Guardrails";
 import { InventoryPage } from "./pages/Inventory";
+import { MemoryFirewallPage } from "./pages/MemoryFirewall";
 import { OverviewPage } from "./pages/Overview";
 import { PipelinePage } from "./pages/Pipeline";
 import { PlaygroundPage } from "./pages/Playground";
@@ -28,7 +29,7 @@ import { SimulatePage } from "./pages/Simulate";
 interface NavItem {
   path: string;
   label: string;
-  group: "Operate" | "Configure" | "Observe";
+  group: "Operate" | "Configure" | "Services" | "Observe";
   visible: (s: ReturnType<typeof useSession>) => boolean;
   render: () => ReactNode;
 }
@@ -76,6 +77,13 @@ const NAV: NavItem[] = [
     group: "Configure",
     visible: (s) => s.can("read") && s.me.features.discovery === true,
     render: () => <ConnectorsPage />,
+  },
+  {
+    path: "/memory-firewall",
+    label: "Memory Firewall",
+    group: "Services",
+    visible: (s) => s.can("read") && s.me.features.memory_firewall === true,
+    render: () => <MemoryFirewallPage />,
   },
   { path: "/fleet", label: "Gateways", group: "Observe", visible: can("read"), render: () => <FleetPage /> },
   {
@@ -166,7 +174,7 @@ function Shell() {
     "/approvals": pendingRequests.data,
   };
 
-  const groups: NavItem["group"][] = ["Operate", "Configure", "Observe"];
+  const groups: NavItem["group"][] = ["Operate", "Configure", "Services", "Observe"];
   const themeLabel = theme === "system" ? "Theme: system" : theme === "dark" ? "Theme: dark" : "Theme: light";
 
   return (

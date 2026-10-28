@@ -5,6 +5,7 @@ import { DecisionChart } from "../components/DecisionChart";
 import { Badge, Card, EmptyState, ErrorBanner, Loading, Mono, PageHeader } from "../components/ui";
 import { relativeTime } from "../lib/format";
 import { useNow, useResource } from "../lib/hooks";
+import { serviceHealth } from "../lib/memoryFirewall";
 import { useSession } from "../lib/session";
 import { ENVIRONMENTS, type Diff, type Gateway, type Snapshot } from "../lib/types";
 import { AnalyticsTiles } from "./Analytics";
@@ -40,6 +41,12 @@ export function OverviewPage() {
     60_000,
   );
   const changes = useResource(() => (me.platform ? api.changes({ limit: 8 }) : Promise.resolve([])), [api], 60_000);
+  const memoryFirewall = useResource(
+    () => (me.features.memory_firewall ? api.memoryFirewallStatus() : Promise.resolve(undefined)),
+    [api],
+    30_000,
+  );
+  const mfHealth = serviceHealth(memoryFirewall.data);
 
   const pendingReviews = reviews.data?.length ?? 0;
   const soonest = [...(reviews.data ?? [])].sort((a, b) => a.expires_at.localeCompare(b.expires_at))[0];
@@ -83,6 +90,16 @@ export function OverviewPage() {
             )}
           </span>
         </a>
+        {me.features.memory_firewall && (
+          <a className="stat stat-link" href="#/memory-firewall">
+            <span className="stat-label">Memory Firewall</span>
+            <span className="stat-value">{memoryFirewall.data?.service ? memoryFirewall.data.service.counters.quarantined : "—"}</span>
+            <span className="stat-hint">
+              <Badge tone={mfHealth.tone}>{mfHealth.label}</Badge>
+              {memoryFirewall.data?.service && "memory quarantined"}
+            </span>
+          </a>
+        )}
       </div>
 
       <Card flush title="Environments">

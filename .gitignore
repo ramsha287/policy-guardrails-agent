@@ -13,6 +13,9 @@ dist/
 !*.env.example
 bootstrap/
 
+# memory-firewall service run locally: signing keys, event log, self-test scratch
+services/memory-firewall/.data/
+
 # console
 node_modules/
 apps/console/screenshots/

@@ -13,6 +13,7 @@ from ..services.catalog import CatalogService
 from ..services.context import Ctx
 from ..services.discovery import DiscoveryService
 from ..services.gateways import GatewayService
+from ..services.memory_firewall import MemoryFirewallService
 from ..services.playground import PlaygroundService
 from ..services.publishing import PublishService
 from ..services.registry import RegistryService
@@ -34,6 +35,10 @@ class Container:
     discovery_max_observations: int = 20_000
     playground_environments: frozenset[str] = frozenset()
     playground_gateway_urls: dict[str, str] = field(default_factory=dict)
+    # services/memory-firewall; None = not deployed (the console hides its page)
+    memory_firewall_url: str | None = None
+    memory_firewall_api_key: str | None = None
+    memory_firewall_selftest_timeout: float = 150.0
 
     def __post_init__(self) -> None:
         self.catalog = CatalogService(self.ctx)
@@ -67,4 +72,15 @@ class Container:
             environments=self.playground_environments,
             gateway_urls={**self.gateway_urls, **self.playground_gateway_urls},
             default_gateway_url=self.gateway_url,
+        )
+        self.memory_firewall = (
+            MemoryFirewallService(
+                self.ctx,
+                self.http,
+                url=self.memory_firewall_url,
+                api_key=self.memory_firewall_api_key,
+                selftest_timeout=self.memory_firewall_selftest_timeout,
+            )
+            if self.memory_firewall_url
+            else None
         )

@@ -36,6 +36,7 @@ Errors are `{"error": …}` (422 adds `errors` and `warnings`).
 | Playground | `POST /cp/v1/playground` (`environment`, `stage`, `gateway_key`, `request`) → the gateway's status and body; `POST /cp/v1/playground/escalations/{id}` (`environment`, `gateway_key`) | `catalog:write` on the key's tenant; environment in `PLAYGROUND_ENVIRONMENTS` |
 | Decision log | `GET /cp/v1/decisions?environment=&tenant_id=&hours=&limit=&agent_id=&stage=&decision=&outcome=&session_id=`, `GET /cp/v1/decisions/{request_id}` | read; needs `AUDIT_DSN` (503 otherwise) |
 | Analytics | `GET /cp/v1/analytics/guardrails?environment=&tenant_id=&hours=`, `GET /cp/v1/analytics/advisors?…` | read; needs `AUDIT_DSN` |
+| Memory Firewall | `GET /cp/v1/memory-firewall/status`; `GET …/events?limit=`; `POST …/inspect` (`items`, `scan`), `POST …/scan` (`items`), `POST …/self-test`. Relayed to `services/memory-firewall` ([memory-firewall.md](memory-firewall.md#api)) | status: read (any key). events: read, platform. inspect/scan/self-test: `catalog:write`, platform. 503 when `MEMORY_FIREWALL_URL` is unset |
 | Fleet, history, people | `GET /cp/v1/environments/{env}/gateways`, `GET /cp/v1/changes?entity=&entity_id=&limit=` (platform), `POST/GET/DELETE /cp/v1/admin-keys[/{id}]` | read / platform / `admin-keys:write` |
 | Discovery and inventory | `/inv/v1/…`: connectors, runs, entities, graph, link/register/ignore, coverage, summary, findings, reconcile | [discovery.md](discovery.md#api) |
 | Gateway-facing | `GET /cp/v1/internal/environments/{env}/snapshot`, `GET /cp/v1/internal/catalog` (ETags), `POST /cp/v1/internal/gateways/heartbeat`, `POST /cp/v1/internal/reviews`, `GET /cp/v1/internal/reviews/{id}` | `X-Internal-Token` |
@@ -100,6 +101,7 @@ Rollback publishes a *new* version with the old content and resets the working s
 | `PROXY_ENABLED`, `PROXY_UPSTREAM_URL`, `PROXY_UPSTREAM_API_KEY`, `PROXY_DEFAULT_AGENT_ID`, `PROXY_MODELS`, `PROXY_TIMEOUT_SECONDS` | `false`, OpenAI, —, `proxy`, any, 120 | Proxy mode |
 | `AI_GATEWAY_URL`, `AI_GATEWAY_PROJECT_ID`, `AI_GATEWAY_API_KEY` | `http://instant-redaction-service:8001`, —, — | `ai-gateway-pii` (`${…}` in snapshot config; `env://` in the manifest) |
 | `MODERATION_BASE_URL`, `MODERATION_API_KEY` | OpenAI, — | `content-moderation` (operator-set, not assignment config) |
+| `MEMORY_FIREWALL_URL`, `MEMORY_FIREWALL_API_KEY` | `http://memory-firewall:8300` (manifest), — | `memory-firewall` guardrail (operator-set, not assignment config) |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | — | Tracing |
 | `BOOTSTRAP_ENV_FILE` | — | Dev: load the bootstrap env file without overriding |
 | `PORT`, `HOST`, `INTERNAL_PORT` | 8100, `0.0.0.0`, — | With `INTERNAL_PORT`, `/internal/*` is only served there |
@@ -120,9 +122,24 @@ Rollback publishes a *new* version with the old content and resets the working s
 | `PLAYGROUND_ENVIRONMENTS`, `PLAYGROUND_GATEWAY_URLS` | `[]` (Compose: `["dev"]`), `{}` | Environments where the Playground may send real requests, and the gateways' *public* URLs (fallback: `GATEWAY_URLS`/`GATEWAY_URL`) |
 | `AUDIT_DSN` | — | Audit read access: Analytics, Advisors, Decision log, the `gateway` connector, advisor labels. Use a read-only user |
 | `HTTP_TIMEOUT_SECONDS` | 10 | Outbound calls to gateways |
+| `MEMORY_FIREWALL_URL`, `MEMORY_FIREWALL_API_KEY`, `MEMORY_FIREWALL_SELFTEST_TIMEOUT_SECONDS` | —, —, 150 | The Memory Firewall service for the console's Memory Firewall page; unset = page hidden ([memory-firewall.md](memory-firewall.md#configuration)) |
 | `DISCOVERY_SCHEDULER`, `DISCOVERY_TICK_SECONDS`, `DISCOVERY_MAX_OBSERVATIONS`, `DISCOVERY_ALLOW_HTTP`, `DISCOVERY_LOG_DIR`, `DISCOVERY_SECRET_*` | `true`, 60, 20000, `false`, `/var/lib/guardrail-discovery/logs`, — | [discovery.md](discovery.md#settings) |
 | `CONSOLE_DIR` | `/app/console` | Built console, served at `/console` when present |
 | `PORT`, `HOST`, `INTERNAL_PORT`, `TLS_*` | 8200, `0.0.0.0`, —, — | As for the gateway; `/cp/v1/internal/*` only on `INTERNAL_PORT` when set |
+| `LOG_LEVEL` | `INFO` | |
+
+## Memory Firewall service configuration
+
+`services/memory-firewall` (:8300). Details: [memory-firewall.md](memory-firewall.md#configuration).
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `MEMORY_FIREWALL_API_KEY` | required (≥ 16 chars) | Callers send it in `X-API-Key` (the gateway guardrail, the control plane) |
+| `MEMORY_FIREWALL_DATA_DIR` | `/var/lib/memory-firewall` | Ed25519 signing keys (`keys/`), event log (`events.jsonl`), self-test scratch (`selftest/`) |
+| `MEMORY_FIREWALL_TRUSTED_SOURCES` | `["system","user"]` | Source labels the library's `VectorGuard` trusts; a subset of system, user, tool, web |
+| `MEMORY_FIREWALL_MAX_ITEMS`, `MEMORY_FIREWALL_MAX_TEXT_CHARS` | 200, 32768 | Per-request limits (413) |
+| `MEMORY_FIREWALL_MAX_PROVENANCE` | 50000 | Provenance records kept in memory for `/v1/provenance` |
+| `MEMORY_FIREWALL_SELFTEST_TIMEOUT_SECONDS` | 120 | The checkpoint self-test subprocess is killed after this |
 | `LOG_LEVEL` | `INFO` | |
 
 Helm values map onto these; the chart's README lists them
@@ -150,10 +167,12 @@ Helm values map onto these; the chart's README lists them
 packages/guardrail-sdk/           contracts, Guardrail base class, manifest, conformance + evaluation, agent client and hooks
   guardrail_sdk/integrations/     guard_tool, LangGraph nodes/retriever, CrewAI tool/inputs/output
 services/guardrail-gateway/       :8100 gateway: flow, context, descriptors, sessions, risk, OPA client, engine, advisors, verification, audit, events
-  app/plugins/                    ai_gateway_pii (1.0.0, 1.1.0), secrets, prompt_injection, topic_limits, content_moderation, noop
+  app/plugins/                    ai_gateway_pii (1.0.0, 1.1.0), secrets, prompt_injection, topic_limits, content_moderation, memory_firewall, noop
   config/snapshots/<env>.json     seed snapshots (and the config for CONFIG_SOURCE=file)
 services/guardrail-control-plane/ :8200 catalog, registry, publishing, reviews, RBAC, discovery/inventory, analytics, decision log, playground; serves /console
 apps/console/                     the console (React, TypeScript, Vite); mock control plane + Playwright smoke test
+services/memory-firewall/         :8300 HTTP adapter around the Memory Firewall library (provenance gate, scan, checkpoint self-test)
+  vendor/memory-firewall/         the library, a verbatim copy of its source commit (VENDORED.md, SHA256SUMS)
 services/ai-gateway/              the AI Gateway: project-service :8000, instant-redaction-service :8001 (Presidio)
 policies/guardrails/              Rego policy + tests
 deploy/helm/guardrail-platform/   Helm chart, alerts, Grafana dashboard

@@ -39,6 +39,7 @@ The menu only shows what your key can do; the API enforces the same rules. How p
 | | Guardrails | Registered guardrail versions and which gateways have them; register a `guardrail.yaml`; deprecate |
 | | Tenants & keys | Tenants, agents (trust, allowed tools), actions (risk), modifiers, gateway keys (create, bind to an agent, rate limit, revoke) |
 | | Discovery connectors | The inventory's sources: add/edit (platform admins), Run now, run history |
+| **Services** | Memory Firewall | Service health and signing key, the `memory-firewall` guardrail's registration, **Check memory** (writer gate + source trust + scan on items you enter), the **checkpoint self-test** (five storage attacks), and the event log ([memory-firewall.md](memory-firewall.md#console)) |
 | **Observe** | Gateways | Each gateway's heartbeat, snapshot and catalog versions, installed guardrails, last error |
 | | Decision log | Every audited decision: outcome, reason codes, risk signals, guardrail results, advisor answers, hash-chain fields |
 | | Analytics | Decisions over time, by stage and guardrail (enforce vs shadow), block rate, latency |
@@ -48,6 +49,8 @@ The menu only shows what your key can do; the API enforces the same rules. How p
 
 Decision log, Analytics and Advisors need `AUDIT_DSN` on the control plane. Simulate and
 Playground need a gateway URL; the Playground also needs `PLAYGROUND_ENVIRONMENTS` (Compose: dev).
+Memory Firewall needs `MEMORY_FIREWALL_URL` on the control plane; checking memory and the self-test
+need a platform key with `catalog:write`, the event log a platform key.
 
 ## Review a held request
 

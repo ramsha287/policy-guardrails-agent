@@ -19,6 +19,8 @@ pytest packages/guardrail-sdk
 (cd services/guardrail-control-plane && pytest)      # test_postgres_store.py runs with POSTGRES_TEST_DSN
 opa test policies
 (cd apps/console && npm install && npm run typecheck && npm test && npm run build && npm run e2e)
+# the Memory Firewall adapter against the vendored library (Python 3.12)
+(cd services/memory-firewall && pip install -r requirements-dev.txt && pytest)
 helm lint deploy/helm/guardrail-platform --set secrets.create=true
 # the AI Gateway with real Presidio (needs en_core_web_lg)
 (cd services/ai-gateway/instant-redaction-service && pip install -r requirements-dev.txt && pytest)
@@ -37,12 +39,15 @@ What the main test files prove:
 | gateway `test_verify.py`, `test_verification_flow.py` | Assurance, planner, stores, IdP token checks (wrong user, old sign-in, issuer, audience, `acr`, nonce, algorithm confusion), dry run, single-use evidence; full verify → allow / confirm / deny |
 | gateway `test_advisors.py`, `test_calibrate.py` | Questions carry no text; strict answers; caps; only the uncertain band; shadow changes nothing; failures are no signal; hosted data policy; tighten-only; the agent never sees advisors; calibration |
 | gateway `test_content_guardrails.py`, `test_ai_gateway_pii*.py` | `secrets`, `prompt-injection`, `topic-limits`, `content-moderation`, `ai-gateway-pii` 1.0/1.1 against a fake AI Gateway; conformance |
+| gateway `test_memory_firewall.py` | `memory-firewall` against a fake service: labels and ids sent, drop/escalate/block, strongest wins, writer gate, unlabeled = untrusted, no text in results, failures raise (failure_mode applies), config refuses `base_url`, conformance |
+| control plane `test_memory_firewall.py` | The relay: feature flag, status when down or unconfigured, wrong service key, tenant and viewer permissions, change log without text, error mapping, manifest registers and its config schema validates |
+| `services/memory-firewall` `tests/test_api.py`, `test_vendor.py` | The vendored library is byte-identical to `SHA256SUMS`; the adapter over the **real** library: auth, writer gate, source trust, scan, signed provenance verifies, events without text, limits, and the five checkpoint attacks (Guard blocks 5/5) |
 | gateway `test_inventory_risk.py` | `AGENT_FINDING`, `TOOL_DEFINITION_CHANGED`, MCP name matching |
 | gateway `test_outbox.py`, `test_audit_*.py`, `integration/test_postgres.py` | Event envelopes and signatures; audit writer outage/overflow; spool replay; partitions; outbox in the audit transaction |
 | control plane `test_services.py` | Catalog, tenant confinement, registry, publish/two-person/stale/rollback, diff, change log, reviews and expiry, admin keys, key binding, advisor policy, analytics shapes, training labels, snapshot visibility for tenant keys |
 | control plane `test_discovery.py` | All six connectors with recorded responses, URL and secret guards, leases, register/link/ignore/accept, MCP pinning, catalog flags |
 | control plane `test_playground.py`, `test_analytics.py`, `test_api.py` | Playground relay and its permission and key checks; decision log filters and tenant scoping; the HTTP layer |
-| console `tests/*.test.ts`, `e2e/smoke.mjs` | Helpers and the API client; every screen in light and dark mode, review decision, two-person publish, inventory, connectors, key creation, Playground → held request → audit record, tenant view, phone width |
+| console `tests/*.test.ts`, `e2e/smoke.mjs` | Helpers and the API client; every screen in light and dark mode, Memory Firewall check + self-test + event log, review decision, two-person publish, inventory, connectors, key creation, Playground → held request → audit record, tenant view, phone width |
 | `tests/e2e/test_security_flows.py` (live) | The security flows below, through the console's API, against the real gateway, OPA, Presidio and Postgres |
 
 CI (`.github/workflows/ci.yml`) runs all of these on every push; the `e2e` job starts the Compose

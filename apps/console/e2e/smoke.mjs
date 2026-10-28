@@ -115,6 +115,7 @@ const PAGES = [
   ["/guardrails", "Guardrails"],
   ["/catalog", "Tenants & keys"],
   ["/connectors", "Discovery connectors"],
+  ["/memory-firewall", "Memory Firewall"],
   ["/fleet", "Gateways"],
   ["/decisions", "Decision log"],
   ["/analytics", "Analytics"],
@@ -153,6 +154,21 @@ async function main() {
     await shot(page, "flow-simulate");
 
     if (!LIVE) {
+      // ---- memory firewall: check the example memory, then run the checkpoint self-test
+      await visit(page, "/memory-firewall", "Memory Firewall");
+      await page.getByRole("button", { name: "Check memory" }).click();
+      const verdicts = page.locator("table").first().locator("tbody tr");
+      await verdicts.first().waitFor();
+      const quarantined = await page.locator("tbody .badge", { hasText: "quarantined" }).count();
+      check(quarantined === 2, `memory firewall quarantines the web note and the forged write (${quarantined} quarantined)`);
+      await page.getByRole("button", { name: "Run self-test" }).click();
+      await page.getByText(/Memory Firewall blocked 5 of 5 attacks/).waitFor();
+      check(true, "memory firewall self-test blocks all five checkpoint attacks");
+      await page.getByRole("button", { name: "Refresh" }).click();
+      await page.getByRole("cell", { name: "web-note-17" }).first().waitFor();
+      check(true, "memory firewall event log lists the quarantine");
+      await shot(page, "flow-memory-firewall");
+
       // ---- review queue: approve the first pending item
       await visit(page, "/reviews", "Review queue");
       const before = await page.locator("tbody tr").count();

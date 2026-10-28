@@ -94,9 +94,10 @@ const state = {
       ["prompt-injection", "Instructions hidden in user input, retrieved documents and tool results.", ["input", "retrieval", "tool"], ["allow", "modify", "escalate", "block"]],
       ["topic-limits", "Denied topics and requests outside what the agent is for.", ["input", "output"], ["allow", "escalate", "block"]],
       ["content-moderation", "Harmful content via an OpenAI-compatible moderation endpoint.", ["input", "output"], ["allow", "escalate", "block"]],
+      ["memory-firewall", "Retrieved agent memory checked by the Memory Firewall service: unauthorized writers and untrusted sources are quarantined.", ["retrieval"], ["allow", "modify", "escalate", "block"]],
     ].map(([id, description, stages, decisions_emitted]) => ({
       guardrail_id: id, version: "1.0.0", status: "validated", source: "gateway", conformance_report: { passed: true }, created_at: ago(60 * 24),
-      manifest: { ...NOOP, id, description, stages, decisions_emitted, kind: id === "content-moderation" ? "remote" : "local" },
+      manifest: { ...NOOP, id, description, stages, decisions_emitted, kind: ["content-moderation", "memory-firewall"].includes(id) ? "remote" : "local", failure_mode: id === "memory-firewall" ? "fail_closed" : NOOP.failure_mode },
     })),
   ],
   assignments: {},
@@ -347,8 +348,60 @@ route("GET", "/me", ({ p }) => ({
   environments: ENVS,
   two_person_environments: ["production"],
   review_ttl_minutes: 15,
-  features: { simulate: true, analytics: true, discovery: true, decisions: true, playground: ["dev"] },
+  features: { simulate: true, analytics: true, discovery: true, decisions: true, playground: ["dev"], memory_firewall: true },
 }));
+
+// ---- memory firewall: a stand-in for services/memory-firewall's rules (the real ones are tested there)
+
+const MF = { started: Date.now(), admitted: 0, quarantined: 0, flagged: 0, provenance: 0, events: [], lastSelfTest: null };
+const MF_INJECTION = /ignore\s+(all\s+)?(the\s+)?(previous|above|prior|earlier)\s+(instructions?|context|messages?|rules?)/i;
+const mfEvent = (event, thread_id, checkpoint_id, reason) =>
+  MF.events.unshift({ event, thread_id, checkpoint_id, checkpoint_ns: "", ts: now(), ...(reason ? { reason, mitre: "AML.T0080" } : {}) });
+
+route("GET", "/memory-firewall/status", ({ p }) => {
+  p.require("read", p.tenant_id);
+  return {
+    configured: true, reachable: true, ready: true, latency_ms: 3.4, ...(p.platform ? { url: "http://memory-firewall:8300" } : {}),
+    service: {
+      service: "memory-firewall", version: "1.0.0", library_version: "0.1.0", key_id: "5c1f0e9a2b7d4c33",
+      trusted_sources: ["system", "user"], sources: ["system", "user", "tool", "web"], mitre_technique: "AML.T0080", injection_patterns: 8,
+      uptime_seconds: Math.round((Date.now() - MF.started) / 1000) + 7200,
+      counters: { admitted: MF.admitted, quarantined: MF.quarantined, scan_flagged: MF.flagged, provenance_records: MF.provenance, provenance_coverage: 1 },
+      last_selftest: MF.lastSelfTest,
+    },
+  };
+});
+route("GET", "/memory-firewall/events", ({ p, query }) => (p.require("read"), { events: MF.events.slice(0, Number(query.limit ?? 50)) }));
+route("POST", "/memory-firewall/inspect", ({ p, body }) => {
+  p.require("catalog:write");
+  if (!Array.isArray(body?.items) || body.items.length === 0) throw new HttpError(422, "invalid request", { errors: ["items: List should have at least 1 item"] });
+  const results = body.items.map((it) => {
+    const reason = !it.authorized ? "unauthorized writer" : ["system", "user"].includes(it.source) ? null : `untrusted source (${it.source}) quarantined`;
+    const scan = body.scan && MF_INJECTION.test(it.text ?? "") ? ["injection-text: ignore\\s+(all\\s+)?(the\\s+)?(pr"] : [];
+    if (reason) (MF.quarantined++, mfEvent("reject", it.source, it.id, reason), mfEvent("quarantine", it.source, it.id, reason));
+    else (MF.admitted++, MF.provenance++, mfEvent("write", it.writer, it.id));
+    if (scan.length) MF.flagged++;
+    return { id: it.id, source: it.source, writer: it.writer, admitted: !reason, quarantine_reason: reason, scan_findings: scan, signature: reason ? null : "9f".repeat(64) };
+  });
+  const summary = { items: results.length, admitted: results.filter((r) => r.admitted).length, quarantined: results.filter((r) => !r.admitted).length, scan_flagged: results.filter((r) => r.scan_findings.length).length };
+  log("memory-firewall", "inspect", "inspect", p.actor, summary);
+  return { results, summary, key_id: "5c1f0e9a2b7d4c33" };
+});
+route("POST", "/memory-firewall/self-test", ({ p }) => {
+  p.require("catalog:write");
+  const attacks = ["Edit content", "Downgrade / unsigned blob", "Replay old state", "Truncate latest", "Cross-thread move"];
+  const plain = { "Edit content": "SUCCEEDED", "Downgrade / unsigned blob": "N/A" };
+  const encrypted = { "Edit content": "DETECTED" };
+  const results = attacks.flatMap((attack) => [
+    { attack, mode: "plain", control: "reject", tampered: "approve", result: plain[attack] ?? "SUCCEEDED" },
+    { attack, mode: "encrypted", control: "reject", tampered: "approve", result: encrypted[attack] ?? "SUCCEEDED" },
+    { attack, mode: "guard", control: "reject", tampered: "error", result: "DETECTED" },
+  ]);
+  const out = { modes: ["plain", "encrypted", "guard"], results, attacks: 5, guard_blocked: 5, passed: true, finished_at: now(), duration_ms: 1840.2 };
+  MF.lastSelfTest = { passed: true, finished_at: out.finished_at, duration_ms: out.duration_ms, guard_blocked: 5, attacks: 5 };
+  log("memory-firewall", "selftest", "self-test", p.actor, { passed: true, guard_blocked: 5, attacks: 5 });
+  return out;
+});
 
 route("GET", "/reviews", ({ p, query }) => {
   const tenant = query.tenant_id || (p.platform ? null : p.tenant_id);

@@ -41,6 +41,11 @@ import type {
   GuardRequestBody,
   PlaygroundResult,
   Tenant,
+  InspectResult,
+  MemoryEvent,
+  MemoryFirewallStatus,
+  MemoryItem,
+  SelfTestResult,
 } from "./types";
 
 export const API_PREFIX = "/cp/v1";
@@ -344,6 +349,22 @@ export class Api {
     };
   }) {
     return this.request<SimulationResult>("POST", "/simulate", body);
+  }
+
+  // ---- memory firewall (services/memory-firewall, relayed by the control plane)
+  memoryFirewallStatus() {
+    return this.get<MemoryFirewallStatus>("/memory-firewall/status");
+  }
+  memoryFirewallEvents(limit = 50) {
+    return this.get<{ events: MemoryEvent[] }>("/memory-firewall/events", { limit });
+  }
+  /** Writer gate + source trust per item; records provenance and events on the service. */
+  memoryFirewallInspect(items: MemoryItem[], scan: boolean) {
+    return this.request<InspectResult>("POST", "/memory-firewall/inspect", { items, scan });
+  }
+  /** The five checkpoint attacks against the library's GuardedSaver (takes a few seconds). */
+  memoryFirewallSelfTest() {
+    return this.request<SelfTestResult>("POST", "/memory-firewall/self-test");
   }
 
   // ---- discovery and inventory
