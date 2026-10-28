@@ -1,0 +1,21 @@
+%%{init: {"theme": "base", "darkMode": false, "fontFamily": "Helvetica, Arial, sans-serif", "fontSize": "16px", "themeVariables": {"background": "#ffffff", "primaryColor": "#eef6ff", "primaryBorderColor": "#93c5fd", "primaryTextColor": "#1f2937", "secondaryColor": "#f3f0ff", "tertiaryColor": "#f8fafc", "lineColor": "#64748b", "textColor": "#1f2937", "clusterBkg": "#f8fafc", "clusterBorder": "#cbd5e1", "edgeLabelBackground": "#ffffff", "titleColor": "#1f2937"}, "flowchart": {"curve": "basis", "nodeSpacing": 40, "rankSpacing": 64, "padding": 16, "htmlLabels": true}}}%%
+flowchart LR
+  E["Editor<br/>Pipeline · Tenants & keys"] -- "working set" --> CP["Control plane"]
+  CP -- "publish: compile + validate<br/>production: second admin approves" --> S[("Snapshot vN<br/>immutable")]
+  CP -- "catalog change: automatic" --> C[("Catalog vN<br/>tenants · key hashes · agents<br/>actions · inventory flags")]
+  S & C -- "Redis push + ETag poll 30 s" --> GW["Gateways"]
+  GW -- "disk cache" --> GW
+  GW -- "heartbeat: installed guardrails<br/>versions · capabilities" --> CP
+
+  classDef client fill:#f3f0ff,stroke:#a78bfa,stroke-width:1.5px,color:#1f2937
+  classDef edge fill:#e0f2fe,stroke:#38bdf8,stroke-width:1.5px,color:#1f2937
+  classDef control fill:#ccfbf1,stroke:#2dd4bf,stroke-width:1.5px,color:#1f2937
+  classDef guard fill:#dcfce7,stroke:#4ade80,stroke-width:1.5px,color:#1f2937
+  classDef mfw fill:#d1fae5,stroke:#10b981,stroke-width:2.5px,color:#1f2937
+  classDef store fill:#f1f5f9,stroke:#94a3b8,stroke-width:1.5px,color:#1f2937
+  classDef external fill:#ffffff,stroke:#94a3b8,stroke-width:1.5px,stroke-dasharray:5 4,color:#1f2937
+  classDef finding fill:#fef9c3,stroke:#facc15,stroke-width:1.5px,color:#1f2937
+  class E client
+  class CP control
+  class GW edge
+  class S,C store

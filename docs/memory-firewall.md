@@ -24,48 +24,8 @@ self-test.
 
 ## Architecture and boundary
 
-```mermaid
-%%{init: {"theme": "base", "darkMode": false, "fontFamily": "Helvetica, Arial, sans-serif", "fontSize": "16px", "themeVariables": {"background": "#ffffff", "primaryColor": "#eef6ff", "primaryBorderColor": "#93c5fd", "primaryTextColor": "#1f2937", "secondaryColor": "#f3f0ff", "tertiaryColor": "#f8fafc", "lineColor": "#64748b", "textColor": "#1f2937", "clusterBkg": "#f8fafc", "clusterBorder": "#cbd5e1", "edgeLabelBackground": "#ffffff", "titleColor": "#1f2937"}, "flowchart": {"curve": "basis", "nodeSpacing": 40, "rankSpacing": 64, "padding": 16, "htmlLabels": true}}}%%
-flowchart LR
-  subgraph Guardrail["Guardrail repository (changed)"]
-    direction TB
-    PL["Gateway plugin<br/>app/plugins/memory_firewall"]
-    CPR["Control plane<br/>services/memory_firewall.py<br/>routers/memory_firewall.py"]
-    UI["Console<br/>pages/MemoryFirewall.tsx"]
-    subgraph SVC["services/memory-firewall"]
-      direction TB
-      API["app/main.py<br/>HTTP, auth, limits"]
-      FW["app/firewall.py<br/>the only importer of the library"]
-      ST["app/selftest.py<br/>subprocess"]
-    end
-  end
-
-  subgraph Library["vendor/memory-firewall · verbatim @ 807b972"]
-    direction TB
-    G["src/guard<br/>keys · ledger · saver · vector_guard · events"]
-    SC["src/scan/scanner.py"]
-    LAB["src/lab<br/>agent · store · tamper"]
-  end
-
-  UI --> CPR --> API
-  PL --> API
-  API --> FW --> G & SC
-  API --> ST --> LAB --> G
-  FW --> VOL[("/var/lib/memory-firewall<br/>keys/ · events.jsonl · selftest/")]
-
-  classDef client fill:#f3f0ff,stroke:#a78bfa,stroke-width:1.5px,color:#1f2937
-  classDef edge fill:#e0f2fe,stroke:#38bdf8,stroke-width:1.5px,color:#1f2937
-  classDef control fill:#ccfbf1,stroke:#2dd4bf,stroke-width:1.5px,color:#1f2937
-  classDef guard fill:#dcfce7,stroke:#4ade80,stroke-width:1.5px,color:#1f2937
-  classDef mfw fill:#d1fae5,stroke:#10b981,stroke-width:2.5px,color:#1f2937
-  classDef store fill:#f1f5f9,stroke:#94a3b8,stroke-width:1.5px,color:#1f2937
-  class UI client
-  class PL edge
-  class CPR control
-  class API,FW,ST guard
-  class G,SC,LAB mfw
-  class VOL store
-```
+<!-- Source: docs/diagrams/memory-firewall-architecture.mmd (Mermaid). Exported as PNG so it renders the same in light and dark GitHub themes. -->
+![Memory firewall architecture](docs/diagrams/memory-firewall-architecture.png)
 
 - **Vendored, verbatim.** `vendor/memory-firewall` holds `pyproject.toml` (read for the version) and
   `src/guard`, `src/scan`, `src/lab`, copied byte for byte from commit `807b972` (raw git blobs, LF
@@ -88,30 +48,8 @@ flowchart LR
 
 ## Request flow: retrieved memory
 
-```mermaid
-%%{init: {"theme": "base", "darkMode": false, "fontFamily": "Helvetica, Arial, sans-serif", "fontSize": "16px", "themeVariables": {"background": "#ffffff", "primaryColor": "#eef6ff", "primaryBorderColor": "#93c5fd", "primaryTextColor": "#1f2937", "textColor": "#1f2937", "actorBkg": "#eef6ff", "actorBorder": "#93c5fd", "actorTextColor": "#1f2937", "actorLineColor": "#94a3b8", "signalColor": "#475569", "signalTextColor": "#1f2937", "labelBoxBkgColor": "#f3f0ff", "labelBoxBorderColor": "#c4b5fd", "labelTextColor": "#1f2937", "loopTextColor": "#1f2937", "noteBkgColor": "#ecfdf5", "noteBorderColor": "#6ee7b7", "noteTextColor": "#1f2937", "activationBkgColor": "#ccfbf1", "activationBorderColor": "#5eead4", "sequenceNumberColor": "#1f2937", "altSectionBkgColor": "#f8fafc"}, "sequence": {"actorMargin": 60, "messageMargin": 44}}}%%
-sequenceDiagram
-  autonumber
-  participant Ag as Agent
-  participant GW as Gateway engine
-  participant PL as memory-firewall plugin
-  participant MF as Memory Firewall service
-  participant L as Library (VectorGuard, scan)
-  Ag->>GW: POST /v1/guard/retrieval (chunks with metadata.source_type, metadata.writer)
-  GW->>PL: evaluate(context, payload) — if assigned for this environment, tenant, agent
-  PL->>PL: label each chunk: id = tenant/agent/chunk, source, writer, authorized (glob)
-  PL->>MF: POST /v1/memory/inspect (X-API-Key, items, scan)
-  MF->>L: admit(doc, source, writer, authorized) per item, then scan_text(text)
-  L-->>MF: admitted + signature, or quarantined + reason, events.jsonl appended
-  MF-->>PL: per-item verdicts (no text)
-  alt quarantined or flagged
-    PL-->>GW: MODIFY (chunks dropped) / ESCALATE / BLOCK + findings
-  else all admitted and clean
-    PL-->>GW: ALLOW
-  end
-  Note over GW: strongest decision across guardrails wins,<br/>audit stores finding types and locations only
-  GW-->>Ag: allow / modify (remaining chunks) / escalate / block
-```
+<!-- Source: docs/diagrams/memory-firewall-request-flow.mmd (Mermaid). Exported as PNG so it renders the same in light and dark GitHub themes. -->
+![Memory firewall request flow](docs/diagrams/memory-firewall-request-flow.png)
 
 ## Files added and changed in this repository
 

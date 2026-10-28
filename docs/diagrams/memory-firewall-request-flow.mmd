@@ -1,0 +1,22 @@
+%%{init: {"theme": "base", "darkMode": false, "fontFamily": "Helvetica, Arial, sans-serif", "fontSize": "16px", "themeVariables": {"background": "#ffffff", "primaryColor": "#eef6ff", "primaryBorderColor": "#93c5fd", "primaryTextColor": "#1f2937", "textColor": "#1f2937", "actorBkg": "#eef6ff", "actorBorder": "#93c5fd", "actorTextColor": "#1f2937", "actorLineColor": "#94a3b8", "signalColor": "#475569", "signalTextColor": "#1f2937", "labelBoxBkgColor": "#f3f0ff", "labelBoxBorderColor": "#c4b5fd", "labelTextColor": "#1f2937", "loopTextColor": "#1f2937", "noteBkgColor": "#ecfdf5", "noteBorderColor": "#6ee7b7", "noteTextColor": "#1f2937", "activationBkgColor": "#ccfbf1", "activationBorderColor": "#5eead4", "sequenceNumberColor": "#1f2937", "altSectionBkgColor": "#f8fafc"}, "sequence": {"actorMargin": 60, "messageMargin": 44}}}%%
+sequenceDiagram
+  autonumber
+  participant Ag as Agent
+  participant GW as Gateway engine
+  participant PL as memory-firewall plugin
+  participant MF as Memory Firewall service
+  participant L as Library (VectorGuard, scan)
+  Ag->>GW: POST /v1/guard/retrieval (chunks with metadata.source_type, metadata.writer)
+  GW->>PL: evaluate(context, payload) — if assigned for this environment, tenant, agent
+  PL->>PL: label each chunk: id = tenant/agent/chunk, source, writer, authorized (glob)
+  PL->>MF: POST /v1/memory/inspect (X-API-Key, items, scan)
+  MF->>L: admit(doc, source, writer, authorized) per item, then scan_text(text)
+  L-->>MF: admitted + signature, or quarantined + reason, events.jsonl appended
+  MF-->>PL: per-item verdicts (no text)
+  alt quarantined or flagged
+    PL-->>GW: MODIFY (chunks dropped) / ESCALATE / BLOCK + findings
+  else all admitted and clean
+    PL-->>GW: ALLOW
+  end
+  Note over GW: strongest decision across guardrails wins,<br/>audit stores finding types and locations only
+  GW-->>Ag: allow / modify (remaining chunks) / escalate / block

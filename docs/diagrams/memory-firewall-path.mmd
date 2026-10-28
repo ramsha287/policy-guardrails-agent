@@ -1,0 +1,34 @@
+%%{init: {"theme": "base", "darkMode": false, "fontFamily": "Helvetica, Arial, sans-serif", "fontSize": "16px", "themeVariables": {"background": "#ffffff", "primaryColor": "#eef6ff", "primaryBorderColor": "#93c5fd", "primaryTextColor": "#1f2937", "secondaryColor": "#f3f0ff", "tertiaryColor": "#f8fafc", "lineColor": "#64748b", "textColor": "#1f2937", "clusterBkg": "#f8fafc", "clusterBorder": "#cbd5e1", "edgeLabelBackground": "#ffffff", "titleColor": "#1f2937"}, "flowchart": {"curve": "basis", "nodeSpacing": 40, "rankSpacing": 64, "padding": 16, "htmlLabels": true}}}%%
+flowchart LR
+  AG["Agent<br/>retrieval hook"] -- "POST /v1/guard/retrieval<br/>chunks + metadata.source_type, writer" --> GW
+
+  subgraph Gateway["Guardrail gateway"]
+    GW["Guardrail engine"] --> PL["memory-firewall plugin<br/>labels · ids · writer gate patterns"]
+  end
+
+  subgraph MF["services/memory-firewall · :8300"]
+    direction TB
+    API["FastAPI adapter<br/>X-API-Key · limits · errors"] --> FW["firewall.py<br/>integration boundary"]
+    FW --> LIB["Memory Firewall library<br/>vendor/ · verbatim @ 807b972<br/>guard.vector_guard · guard.keys · guard.events<br/>scan.scanner · lab.tamper (self-test)"]
+  end
+
+  PL -- "POST /v1/memory/inspect" --> API
+  CP["Control plane<br/>/cp/v1/memory-firewall/*"] -- "status · events · inspect · scan · self-test" --> API
+  UI["Console<br/>Memory Firewall page"] -- "cpk_ key" --> CP
+  LIB --> KEYS[("Data volume<br/>Ed25519 keys · events.jsonl<br/>selftest scratch DBs")]
+  PL -. "drop · hold · block<br/>findings: MEMORY_QUARANTINED<br/>MEMORY_INJECTION_TEXT" .-> GW
+
+  classDef client fill:#f3f0ff,stroke:#a78bfa,stroke-width:1.5px,color:#1f2937
+  classDef edge fill:#e0f2fe,stroke:#38bdf8,stroke-width:1.5px,color:#1f2937
+  classDef control fill:#ccfbf1,stroke:#2dd4bf,stroke-width:1.5px,color:#1f2937
+  classDef guard fill:#dcfce7,stroke:#4ade80,stroke-width:1.5px,color:#1f2937
+  classDef mfw fill:#d1fae5,stroke:#10b981,stroke-width:2.5px,color:#1f2937
+  classDef store fill:#f1f5f9,stroke:#94a3b8,stroke-width:1.5px,color:#1f2937
+  classDef external fill:#ffffff,stroke:#94a3b8,stroke-width:1.5px,stroke-dasharray:5 4,color:#1f2937
+  classDef finding fill:#fef9c3,stroke:#facc15,stroke-width:1.5px,color:#1f2937
+  class AG,UI client
+  class GW,PL edge
+  class CP control
+  class API,FW guard
+  class LIB mfw
+  class KEYS store

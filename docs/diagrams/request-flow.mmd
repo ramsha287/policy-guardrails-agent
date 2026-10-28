@@ -1,0 +1,32 @@
+%%{init: {"theme": "base", "darkMode": false, "fontFamily": "Helvetica, Arial, sans-serif", "fontSize": "16px", "themeVariables": {"background": "#ffffff", "primaryColor": "#eef6ff", "primaryBorderColor": "#93c5fd", "primaryTextColor": "#1f2937", "textColor": "#1f2937", "actorBkg": "#eef6ff", "actorBorder": "#93c5fd", "actorTextColor": "#1f2937", "actorLineColor": "#94a3b8", "signalColor": "#475569", "signalTextColor": "#1f2937", "labelBoxBkgColor": "#f3f0ff", "labelBoxBorderColor": "#c4b5fd", "labelTextColor": "#1f2937", "loopTextColor": "#1f2937", "noteBkgColor": "#ecfdf5", "noteBorderColor": "#6ee7b7", "noteTextColor": "#1f2937", "activationBkgColor": "#ccfbf1", "activationBorderColor": "#5eead4", "sequenceNumberColor": "#1f2937", "altSectionBkgColor": "#f8fafc"}, "sequence": {"actorMargin": 60, "messageMargin": 44}}}%%
+sequenceDiagram
+  autonumber
+  participant Ag as Agent
+  participant GW as Gateway
+  participant S as Session store (Redis)
+  participant O as OPA
+  participant G as Guardrails
+  participant Adv as Advisors
+  participant CP as Control plane
+  participant DB as Audit log
+  Ag->>GW: POST /v1/guard/{stage} (gk_ key, agent, action, session, payload)
+  GW->>GW: auth + rate limit, normalise text, build context (trust, inherent risk)
+  GW->>GW: identity binding (bound key must match agent_id)
+  GW->>S: session view (taint, labels, denials, targets, baselines)
+  GW->>GW: action descriptor + risk v2 signals → score, band
+  GW->>O: policy input (scores, tool, classification, identity, descriptor, session, risk)
+  O-->>GW: allow / deny + obligations
+  GW->>G: run assigned guardrails in order (shadow ones only recorded)
+  Note over G: local plugins in-process, remote ones call<br/>AI Gateway (PII) and Memory Firewall (retrieved memory)
+  G-->>GW: allow / modify / block / escalate
+  GW->>Adv: only if band is elevated or high and nothing blocked
+  Adv-->>GW: capped points / verify request (enforce mode) or shadow record
+  GW->>GW: decision table (+ verification: SQL dry run, user confirmation)
+  alt held for a person
+    GW->>CP: file review (encrypted payload)
+    GW-->>Ag: 202 escalate + escalation_id (agent polls /v1/escalations/{id})
+  else
+    GW-->>Ag: 200 allow / modify (payload) / block, or 403 deny
+  end
+  GW->>S: record step (taint, labels, denials, volumes)
+  GW->>DB: audit row (hash-chained) + outbox event, written asynchronously

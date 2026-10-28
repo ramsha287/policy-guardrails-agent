@@ -6,94 +6,8 @@ the [status table](#what-is-built-and-how-well-it-is-tested) says how.
 
 ## Components
 
-```mermaid
-%%{init: {"theme": "base", "darkMode": false, "fontFamily": "Helvetica, Arial, sans-serif", "fontSize": "16px", "themeVariables": {"background": "#ffffff", "primaryColor": "#eef6ff", "primaryBorderColor": "#93c5fd", "primaryTextColor": "#1f2937", "secondaryColor": "#f3f0ff", "tertiaryColor": "#f8fafc", "lineColor": "#64748b", "textColor": "#1f2937", "clusterBkg": "#f8fafc", "clusterBorder": "#cbd5e1", "edgeLabelBackground": "#ffffff", "titleColor": "#1f2937"}, "flowchart": {"curve": "basis", "nodeSpacing": 40, "rankSpacing": 64, "padding": 16, "htmlLabels": true}}}%%
-flowchart TB
-  subgraph ENV["Enterprise environments"]
-    direction LR
-    AG["`**AI agents**<br/>SDK · LangGraph · CrewAI<br/>OpenAI proxy · AuthZEN`"]
-    PE["`**People**<br/>console in a browser`"]
-    SRC["`**Infrastructure sources**<br/>audit logs · Kubernetes<br/>DNS · OpenAI · Bedrock · MCP`"]
-  end
-
-  subgraph DISC["Discovery plane"]
-    direction TB
-    CON["`**Connectors**<br/>read-only · scheduled`"]
-    NORM["`**Normalize**<br/>resolve · classify · reconcile`"]
-  end
-
-  subgraph ENF["Enforcement points"]
-    GW["`**Guardrail gateway** · :8100<br/>/v1/guard · proxy · AuthZEN`"]
-  end
-
-  subgraph IDC["Identity and configuration"]
-    direction LR
-    CP["`**Control plane** · :8200<br/>snapshots · catalog<br/>publish approvals`"]
-    ID["`**Keys and agent binding**<br/>gk_ agent keys<br/>cpk_ admin roles`"]
-  end
-
-  subgraph INV["Agent inventory"]
-    IV["`**Agents, entities, findings**<br/>shadow · unmanaged<br/>stale`"]
-  end
-
-  subgraph PDP["Decision plane"]
-    direction LR
-    C["`**Context**<br/>identity · trust`"]
-    R["`**Risk**<br/>signals · bands`"]
-    P["`**Policy**<br/>OPA · deny is final`"]
-    G["`**Guardrails**<br/>PII · secrets<br/>injection · memory`"]
-    A["`**Advisors**<br/>tighten only`"]
-    D["`**Decide**<br/>decision table · verify`"]
-    C --> R --> P --> G --> A --> D
-  end
-
-  subgraph OUT["Outcomes"]
-    direction LR
-    HUM["`**Human in the loop**<br/>review queue · approvals`"]
-    EVD["`**Evidence and audit**<br/>decision log · hash chain`"]
-    RSP["`**Response and containment**<br/>planned`"]
-  end
-
-  EBUS["`**Event bus**<br/>decision events · Redis · webhook`"]
-
-  AG -- "gk_ key" --> GW
-  PE -- "cpk_ key" --> CP
-  SRC -.-> CON
-  CON --> NORM --> IV
-  IV -. "findings raise risk" .-> PDP
-  GW --> PDP
-  ID -- "agent binding" --> PDP
-  CP -- "snapshots · catalog" --> GW
-  PDP --> HUM
-  PDP --> EVD
-  PDP -.-> RSP
-  EVD --> EBUS
-
-  classDef actor fill:#f5f3ff,stroke:#a78bfa,stroke-width:1.25px,color:#1f2937
-  classDef external fill:#ffffff,stroke:#94a3b8,stroke-width:1.5px,stroke-dasharray:5 4,color:#1f2937
-  classDef discovery fill:#f0fdfa,stroke:#5eead4,stroke-width:1.25px,color:#1f2937
-  classDef inventory fill:#f1f5f9,stroke:#94a3b8,stroke-width:1.25px,color:#1f2937
-  classDef control fill:#ccfbf1,stroke:#2dd4bf,stroke-width:1.5px,color:#1f2937
-  classDef enforce fill:#eff6ff,stroke:#60a5fa,stroke-width:1.25px,color:#1f2937
-  classDef step fill:#ffffff,stroke:#0d9488,stroke-width:1.25px,color:#1f2937
-  classDef guard fill:#dcfce7,stroke:#4ade80,stroke-width:1.5px,color:#1f2937
-  classDef audit fill:#fefce8,stroke:#eab308,stroke-width:1.25px,color:#1f2937
-  classDef planned fill:#ffffff,stroke:#94a3b8,stroke-width:1.25px,stroke-dasharray:5 4,color:#475569
-  class AG,PE actor
-  class SRC external
-  class CON,NORM discovery
-  class IV inventory
-  class CP,ID control
-  class GW enforce
-  class C,R,P,A,D step
-  class G guard
-  class HUM,EVD audit
-  class EBUS inventory
-  class RSP planned
-  style ENV fill:#fafafa,stroke:#e5e7eb
-  style PDP fill:#f0fdfa,stroke:#5eead4,stroke-width:2px
-  style OUT fill:#fafafa,stroke:#e5e7eb
-```
+<!-- Source: docs/diagrams/architecture.mmd (Mermaid). Exported as PNG so it renders the same in light and dark GitHub themes. -->
+![Architecture](docs/diagrams/architecture.png)
 
 | Component | Code | What it owns |
 | --- | --- | --- |
@@ -113,40 +27,8 @@ flowchart TB
 An agent calls `POST /v1/guard/{input|retrieval|tool|output}` with its gateway key, before it
 sends a prompt, uses retrieved text, runs (or reads the result of) a tool, or returns an answer.
 
-```mermaid
-%%{init: {"theme": "base", "darkMode": false, "fontFamily": "Helvetica, Arial, sans-serif", "fontSize": "16px", "themeVariables": {"background": "#ffffff", "primaryColor": "#eef6ff", "primaryBorderColor": "#93c5fd", "primaryTextColor": "#1f2937", "textColor": "#1f2937", "actorBkg": "#eef6ff", "actorBorder": "#93c5fd", "actorTextColor": "#1f2937", "actorLineColor": "#94a3b8", "signalColor": "#475569", "signalTextColor": "#1f2937", "labelBoxBkgColor": "#f3f0ff", "labelBoxBorderColor": "#c4b5fd", "labelTextColor": "#1f2937", "loopTextColor": "#1f2937", "noteBkgColor": "#ecfdf5", "noteBorderColor": "#6ee7b7", "noteTextColor": "#1f2937", "activationBkgColor": "#ccfbf1", "activationBorderColor": "#5eead4", "sequenceNumberColor": "#1f2937", "altSectionBkgColor": "#f8fafc"}, "sequence": {"actorMargin": 60, "messageMargin": 44}}}%%
-sequenceDiagram
-  autonumber
-  participant Ag as Agent
-  participant GW as Gateway
-  participant S as Session store (Redis)
-  participant O as OPA
-  participant G as Guardrails
-  participant Adv as Advisors
-  participant CP as Control plane
-  participant DB as Audit log
-  Ag->>GW: POST /v1/guard/{stage} (gk_ key, agent, action, session, payload)
-  GW->>GW: auth + rate limit, normalise text, build context (trust, inherent risk)
-  GW->>GW: identity binding (bound key must match agent_id)
-  GW->>S: session view (taint, labels, denials, targets, baselines)
-  GW->>GW: action descriptor + risk v2 signals → score, band
-  GW->>O: policy input (scores, tool, classification, identity, descriptor, session, risk)
-  O-->>GW: allow / deny + obligations
-  GW->>G: run assigned guardrails in order (shadow ones only recorded)
-  Note over G: local plugins in-process, remote ones call<br/>AI Gateway (PII) and Memory Firewall (retrieved memory)
-  G-->>GW: allow / modify / block / escalate
-  GW->>Adv: only if band is elevated or high and nothing blocked
-  Adv-->>GW: capped points / verify request (enforce mode) or shadow record
-  GW->>GW: decision table (+ verification: SQL dry run, user confirmation)
-  alt held for a person
-    GW->>CP: file review (encrypted payload)
-    GW-->>Ag: 202 escalate + escalation_id (agent polls /v1/escalations/{id})
-  else
-    GW-->>Ag: 200 allow / modify (payload) / block, or 403 deny
-  end
-  GW->>S: record step (taint, labels, denials, volumes)
-  GW->>DB: audit row (hash-chained) + outbox event, written asynchronously
-```
+<!-- Source: docs/diagrams/request-flow.mmd (Mermaid). Exported as PNG so it renders the same in light and dark GitHub themes. -->
+![Request flow](docs/diagrams/request-flow.png)
 
 1. **Authenticate.** The `X-API-Key` hash is looked up in the catalog; per-key rate limit (429).
    No snapshot loaded → 503 (fail-closed).
@@ -190,42 +72,8 @@ The Memory Firewall library is vendored, byte for byte, in `services/memory-fire
 code that imports it. Agents' retrieved memory reaches it through the gateway; people reach it
 through the control plane.
 
-```mermaid
-%%{init: {"theme": "base", "darkMode": false, "fontFamily": "Helvetica, Arial, sans-serif", "fontSize": "16px", "themeVariables": {"background": "#ffffff", "primaryColor": "#eef6ff", "primaryBorderColor": "#93c5fd", "primaryTextColor": "#1f2937", "secondaryColor": "#f3f0ff", "tertiaryColor": "#f8fafc", "lineColor": "#64748b", "textColor": "#1f2937", "clusterBkg": "#f8fafc", "clusterBorder": "#cbd5e1", "edgeLabelBackground": "#ffffff", "titleColor": "#1f2937"}, "flowchart": {"curve": "basis", "nodeSpacing": 40, "rankSpacing": 64, "padding": 16, "htmlLabels": true}}}%%
-flowchart LR
-  AG["Agent<br/>retrieval hook"] -- "POST /v1/guard/retrieval<br/>chunks + metadata.source_type, writer" --> GW
-
-  subgraph Gateway["Guardrail gateway"]
-    GW["Guardrail engine"] --> PL["memory-firewall plugin<br/>labels · ids · writer gate patterns"]
-  end
-
-  subgraph MF["services/memory-firewall · :8300"]
-    direction TB
-    API["FastAPI adapter<br/>X-API-Key · limits · errors"] --> FW["firewall.py<br/>integration boundary"]
-    FW --> LIB["Memory Firewall library<br/>vendor/ · verbatim @ 807b972<br/>guard.vector_guard · guard.keys · guard.events<br/>scan.scanner · lab.tamper (self-test)"]
-  end
-
-  PL -- "POST /v1/memory/inspect" --> API
-  CP["Control plane<br/>/cp/v1/memory-firewall/*"] -- "status · events · inspect · scan · self-test" --> API
-  UI["Console<br/>Memory Firewall page"] -- "cpk_ key" --> CP
-  LIB --> KEYS[("Data volume<br/>Ed25519 keys · events.jsonl<br/>selftest scratch DBs")]
-  PL -. "drop · hold · block<br/>findings: MEMORY_QUARANTINED<br/>MEMORY_INJECTION_TEXT" .-> GW
-
-  classDef client fill:#f3f0ff,stroke:#a78bfa,stroke-width:1.5px,color:#1f2937
-  classDef edge fill:#e0f2fe,stroke:#38bdf8,stroke-width:1.5px,color:#1f2937
-  classDef control fill:#ccfbf1,stroke:#2dd4bf,stroke-width:1.5px,color:#1f2937
-  classDef guard fill:#dcfce7,stroke:#4ade80,stroke-width:1.5px,color:#1f2937
-  classDef mfw fill:#d1fae5,stroke:#10b981,stroke-width:2.5px,color:#1f2937
-  classDef store fill:#f1f5f9,stroke:#94a3b8,stroke-width:1.5px,color:#1f2937
-  classDef external fill:#ffffff,stroke:#94a3b8,stroke-width:1.5px,stroke-dasharray:5 4,color:#1f2937
-  classDef finding fill:#fef9c3,stroke:#facc15,stroke-width:1.5px,color:#1f2937
-  class AG,UI client
-  class GW,PL edge
-  class CP control
-  class API,FW guard
-  class LIB mfw
-  class KEYS store
-```
+<!-- Source: docs/diagrams/configuration-flow.mmd (Mermaid). Exported as PNG so it renders the same in light and dark GitHub themes. -->
+![Configuration flow](docs/diagrams/configuration-flow.png)
 
 1. The agent sends retrieved memory to `POST /v1/guard/retrieval` like any other chunks.
 2. If an assignment includes `memory-firewall`, the plugin labels each chunk (source, writer,
@@ -246,29 +94,8 @@ library's `lab.tamper.ATTACKS` in a subprocess against scratch databases. Detail
 
 ## Configuration flow
 
-```mermaid
-%%{init: {"theme": "base", "darkMode": false, "fontFamily": "Helvetica, Arial, sans-serif", "fontSize": "16px", "themeVariables": {"background": "#ffffff", "primaryColor": "#eef6ff", "primaryBorderColor": "#93c5fd", "primaryTextColor": "#1f2937", "secondaryColor": "#f3f0ff", "tertiaryColor": "#f8fafc", "lineColor": "#64748b", "textColor": "#1f2937", "clusterBkg": "#f8fafc", "clusterBorder": "#cbd5e1", "edgeLabelBackground": "#ffffff", "titleColor": "#1f2937"}, "flowchart": {"curve": "basis", "nodeSpacing": 40, "rankSpacing": 64, "padding": 16, "htmlLabels": true}}}%%
-flowchart LR
-  E["Editor<br/>Pipeline · Tenants & keys"] -- "working set" --> CP["Control plane"]
-  CP -- "publish: compile + validate<br/>production: second admin approves" --> S[("Snapshot vN<br/>immutable")]
-  CP -- "catalog change: automatic" --> C[("Catalog vN<br/>tenants · key hashes · agents<br/>actions · inventory flags")]
-  S & C -- "Redis push + ETag poll 30 s" --> GW["Gateways"]
-  GW -- "disk cache" --> GW
-  GW -- "heartbeat: installed guardrails<br/>versions · capabilities" --> CP
-
-  classDef client fill:#f3f0ff,stroke:#a78bfa,stroke-width:1.5px,color:#1f2937
-  classDef edge fill:#e0f2fe,stroke:#38bdf8,stroke-width:1.5px,color:#1f2937
-  classDef control fill:#ccfbf1,stroke:#2dd4bf,stroke-width:1.5px,color:#1f2937
-  classDef guard fill:#dcfce7,stroke:#4ade80,stroke-width:1.5px,color:#1f2937
-  classDef mfw fill:#d1fae5,stroke:#10b981,stroke-width:2.5px,color:#1f2937
-  classDef store fill:#f1f5f9,stroke:#94a3b8,stroke-width:1.5px,color:#1f2937
-  classDef external fill:#ffffff,stroke:#94a3b8,stroke-width:1.5px,stroke-dasharray:5 4,color:#1f2937
-  classDef finding fill:#fef9c3,stroke:#facc15,stroke-width:1.5px,color:#1f2937
-  class E client
-  class CP control
-  class GW edge
-  class S,C store
-```
+<!-- Source: docs/diagrams/discovery-flow.mmd (Mermaid). Exported as PNG so it renders the same in light and dark GitHub themes. -->
+![Discovery flow](docs/diagrams/discovery-flow.png)
 
 - **Snapshots** (one per environment): which guardrail versions run where, in which mode, with
   which config. Published from the working set; production needs a second admin; every version
@@ -290,28 +117,8 @@ flowchart LR
 
 ## Discovery feeds risk
 
-```mermaid
-%%{init: {"theme": "base", "darkMode": false, "fontFamily": "Helvetica, Arial, sans-serif", "fontSize": "16px", "themeVariables": {"background": "#ffffff", "primaryColor": "#eef6ff", "primaryBorderColor": "#93c5fd", "primaryTextColor": "#1f2937", "secondaryColor": "#f3f0ff", "tertiaryColor": "#f8fafc", "lineColor": "#64748b", "textColor": "#1f2937", "clusterBkg": "#f8fafc", "clusterBorder": "#cbd5e1", "edgeLabelBackground": "#ffffff", "titleColor": "#1f2937"}, "flowchart": {"curve": "basis", "nodeSpacing": 40, "rankSpacing": 64, "padding": 16, "htmlLabels": true}}}%%
-flowchart LR
-  K["Connectors<br/>gateway · kubernetes · dns_log<br/>openai_admin · aws_bedrock · mcp"] --> O["Observations"]
-  O --> E["Entities<br/>merged by strong keys"] --> CL["Classification<br/>confirmed · probable · not agent"]
-  CL --> RC["Reconcile with the registry<br/>managed · registered_unmanaged · shadow · stale"]
-  RC --> F["Findings<br/>shadow_agent · unmanaged_agent · stale_agent<br/>tool_definition_changed"]
-  F -- "catalog: open_findings, flagged_tools" --> GW["Gateway risk<br/>AGENT_FINDING +20<br/>TOOL_DEFINITION_CHANGED +25"]
-
-  classDef client fill:#f3f0ff,stroke:#a78bfa,stroke-width:1.5px,color:#1f2937
-  classDef edge fill:#e0f2fe,stroke:#38bdf8,stroke-width:1.5px,color:#1f2937
-  classDef control fill:#ccfbf1,stroke:#2dd4bf,stroke-width:1.5px,color:#1f2937
-  classDef guard fill:#dcfce7,stroke:#4ade80,stroke-width:1.5px,color:#1f2937
-  classDef mfw fill:#d1fae5,stroke:#10b981,stroke-width:2.5px,color:#1f2937
-  classDef store fill:#f1f5f9,stroke:#94a3b8,stroke-width:1.5px,color:#1f2937
-  classDef external fill:#ffffff,stroke:#94a3b8,stroke-width:1.5px,stroke-dasharray:5 4,color:#1f2937
-  classDef finding fill:#fef9c3,stroke:#facc15,stroke-width:1.5px,color:#1f2937
-  class K external
-  class O,E,CL,RC control
-  class F finding
-  class GW edge
-```
+<!-- Source: docs/diagrams/memory-firewall-path.mmd (Mermaid). Exported as PNG so it renders the same in light and dark GitHub themes. -->
+![Memory firewall path](docs/diagrams/memory-firewall-path.png)
 
 Connectors are read-only (list APIs, one audit query, MCP `tools/list` only). An MCP tool's
 definition is hashed and pinned the first time it is seen; a later change opens a

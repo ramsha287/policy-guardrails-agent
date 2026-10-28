@@ -1,0 +1,40 @@
+%%{init: {"theme": "base", "darkMode": false, "fontFamily": "Helvetica, Arial, sans-serif", "fontSize": "16px", "themeVariables": {"background": "#ffffff", "primaryColor": "#eef6ff", "primaryBorderColor": "#93c5fd", "primaryTextColor": "#1f2937", "secondaryColor": "#f3f0ff", "tertiaryColor": "#f8fafc", "lineColor": "#64748b", "textColor": "#1f2937", "clusterBkg": "#f8fafc", "clusterBorder": "#cbd5e1", "edgeLabelBackground": "#ffffff", "titleColor": "#1f2937"}, "flowchart": {"curve": "basis", "nodeSpacing": 40, "rankSpacing": 64, "padding": 16, "htmlLabels": true}}}%%
+flowchart LR
+  subgraph Guardrail["Guardrail repository (changed)"]
+    direction TB
+    PL["Gateway plugin<br/>app/plugins/memory_firewall"]
+    CPR["Control plane<br/>services/memory_firewall.py<br/>routers/memory_firewall.py"]
+    UI["Console<br/>pages/MemoryFirewall.tsx"]
+    subgraph SVC["services/memory-firewall"]
+      direction TB
+      API["app/main.py<br/>HTTP, auth, limits"]
+      FW["app/firewall.py<br/>the only importer of the library"]
+      ST["app/selftest.py<br/>subprocess"]
+    end
+  end
+
+  subgraph Library["vendor/memory-firewall · verbatim @ 807b972"]
+    direction TB
+    G["src/guard<br/>keys · ledger · saver · vector_guard · events"]
+    SC["src/scan/scanner.py"]
+    LAB["src/lab<br/>agent · store · tamper"]
+  end
+
+  UI --> CPR --> API
+  PL --> API
+  API --> FW --> G & SC
+  API --> ST --> LAB --> G
+  FW --> VOL[("/var/lib/memory-firewall<br/>keys/ · events.jsonl · selftest/")]
+
+  classDef client fill:#f3f0ff,stroke:#a78bfa,stroke-width:1.5px,color:#1f2937
+  classDef edge fill:#e0f2fe,stroke:#38bdf8,stroke-width:1.5px,color:#1f2937
+  classDef control fill:#ccfbf1,stroke:#2dd4bf,stroke-width:1.5px,color:#1f2937
+  classDef guard fill:#dcfce7,stroke:#4ade80,stroke-width:1.5px,color:#1f2937
+  classDef mfw fill:#d1fae5,stroke:#10b981,stroke-width:2.5px,color:#1f2937
+  classDef store fill:#f1f5f9,stroke:#94a3b8,stroke-width:1.5px,color:#1f2937
+  class UI client
+  class PL edge
+  class CPR control
+  class API,FW,ST guard
+  class G,SC,LAB mfw
+  class VOL store
