@@ -18,60 +18,92 @@ It runs with Docker Compose on a laptop and on any Kubernetes/k3s cluster with t
 ## Architecture
 
 ```mermaid
-%%{init: {"theme": "base", "fontFamily": "Helvetica, Arial, sans-serif", "themeVariables": {"fontSize": "14px", "primaryTextColor": "#0f172a", "lineColor": "#64748b", "clusterBkg": "#fbfcfe", "clusterBorder": "#e2e8f0", "edgeLabelBackground": "#ffffff"}, "flowchart": {"curve": "basis", "nodeSpacing": 28, "rankSpacing": 48}}}%%
+%%{init: {"theme": "base", "darkMode": false, "fontFamily": "Helvetica, Arial, sans-serif", "fontSize": "16px", "themeVariables": {"background": "#ffffff", "primaryColor": "#eef6ff", "primaryBorderColor": "#93c5fd", "primaryTextColor": "#1f2937", "secondaryColor": "#f3f0ff", "tertiaryColor": "#f8fafc", "lineColor": "#64748b", "textColor": "#1f2937", "clusterBkg": "#f8fafc", "clusterBorder": "#cbd5e1", "edgeLabelBackground": "#ffffff", "titleColor": "#1f2937"}, "flowchart": {"curve": "basis", "nodeSpacing": 40, "rankSpacing": 64, "padding": 16, "htmlLabels": true}}}%%
 flowchart TB
-  subgraph Clients["Clients"]
+  subgraph ENV["Enterprise environments"]
     direction LR
-    AG["AI agents<br/>SDK · LangGraph · CrewAI<br/>OpenAI proxy · AuthZEN"]
-    P["People<br/>console in a browser"]
+    AG["`**AI agents**<br/>SDK · LangGraph · CrewAI<br/>OpenAI proxy · AuthZEN`"]
+    PE["`**People**<br/>console in a browser`"]
+    SRC["`**Infrastructure sources**<br/>audit logs · Kubernetes<br/>DNS · OpenAI · Bedrock · MCP`"]
   end
 
-  subgraph Core["Guardrail platform"]
-    direction LR
-    GW["Guardrail gateway · :8100<br/>identity → risk → OPA → guardrails<br/>→ advisors → decision table → audit"]
-    CP["Control plane · :8200<br/>config · review queue · inventory<br/>decision log · serves the console"]
+  subgraph DISC["Discovery plane"]
+    direction TB
+    CON["`**Connectors**<br/>read-only · scheduled`"]
+    NORM["`**Normalize**<br/>resolve · classify · reconcile`"]
   end
 
-  subgraph Services["Guardrail services"]
-    direction LR
-    OPA["OPA · :8181<br/>authz.rego"]
-    AIG["AI Gateway · :8001<br/>Presidio PII"]
-    MFW["Memory Firewall · :8300<br/>provenance gate · scan<br/>signed checkpoints"]
+  subgraph ENF["Enforcement points"]
+    GW["`**Guardrail gateway** · :8100<br/>/v1/guard · proxy · AuthZEN`"]
   end
 
-  subgraph Data["Data"]
+  subgraph IDC["Identity and configuration"]
     direction LR
-    DB[("Postgres")]
-    R[("Redis")]
+    CP["`**Control plane** · :8200<br/>snapshots · catalog<br/>publish approvals`"]
+    ID["`**Keys and agent binding**<br/>gk_ agent keys<br/>cpk_ admin roles`"]
   end
 
-  SRC["Discovery sources<br/>audit log · Kubernetes · DNS logs<br/>OpenAI · Bedrock · MCP servers"]
+  subgraph INV["Agent inventory"]
+    IV["`**Agents, entities, findings**<br/>shadow · unmanaged<br/>stale`"]
+  end
+
+  subgraph PDP["Decision plane"]
+    direction LR
+    C["`**Context**<br/>identity · trust`"]
+    R["`**Risk**<br/>signals · bands`"]
+    P["`**Policy**<br/>OPA · deny is final`"]
+    G["`**Guardrails**<br/>PII · secrets<br/>injection · memory`"]
+    A["`**Advisors**<br/>tighten only`"]
+    D["`**Decide**<br/>decision table · verify`"]
+    C --> R --> P --> G --> A --> D
+  end
+
+  subgraph OUT["Outcomes"]
+    direction LR
+    HUM["`**Human in the loop**<br/>review queue · approvals`"]
+    EVD["`**Evidence and audit**<br/>decision log · hash chain`"]
+    RSP["`**Response and containment**<br/>planned`"]
+  end
+
+  EBUS["`**Event bus**<br/>decision events · Redis · webhook`"]
 
   AG -- "gk_ key" --> GW
-  P -- "cpk_ key" --> CP
-  GW <-- "snapshots · catalog · reviews · heartbeats" --> CP
-  GW --> OPA
-  GW -- "ai-gateway-pii" --> AIG
-  GW -- "memory-firewall" --> MFW
-  CP -- "status · self-test · events" --> MFW
-  GW & CP --> DB
-  GW <--> R
-  CP -. "read-only connectors" .-> SRC
+  PE -- "cpk_ key" --> CP
+  SRC -.-> CON
+  CON --> NORM --> IV
+  IV -. "findings raise risk" .-> PDP
+  GW --> PDP
+  ID -- "agent binding" --> PDP
+  CP -- "snapshots · catalog" --> GW
+  PDP --> HUM
+  PDP --> EVD
+  PDP -.-> RSP
+  EVD --> EBUS
 
-  classDef client fill:#f5f3ff,stroke:#a78bfa,stroke-width:1px,color:#1e1b4b
-  classDef edge fill:#eff6ff,stroke:#60a5fa,stroke-width:1.5px,color:#0f172a
-  classDef control fill:#f0fdfa,stroke:#2dd4bf,stroke-width:1.5px,color:#0f172a
-  classDef guard fill:#f0fdf4,stroke:#4ade80,stroke-width:1.5px,color:#052e16
-  classDef mfw fill:#ecfdf5,stroke:#059669,stroke-width:2px,color:#052e16
-  classDef store fill:#f8fafc,stroke:#94a3b8,stroke-width:1px,color:#0f172a
-  classDef external fill:#ffffff,stroke:#cbd5e1,stroke-width:1px,stroke-dasharray:4 3,color:#334155
-  class AG,P client
-  class GW edge
-  class CP control
-  class OPA,AIG guard
-  class MFW mfw
-  class DB,R store
+  classDef actor fill:#f5f3ff,stroke:#a78bfa,stroke-width:1.25px,color:#1f2937
+  classDef external fill:#ffffff,stroke:#94a3b8,stroke-width:1.5px,stroke-dasharray:5 4,color:#1f2937
+  classDef discovery fill:#f0fdfa,stroke:#5eead4,stroke-width:1.25px,color:#1f2937
+  classDef inventory fill:#f1f5f9,stroke:#94a3b8,stroke-width:1.25px,color:#1f2937
+  classDef control fill:#ccfbf1,stroke:#2dd4bf,stroke-width:1.5px,color:#1f2937
+  classDef enforce fill:#eff6ff,stroke:#60a5fa,stroke-width:1.25px,color:#1f2937
+  classDef step fill:#ffffff,stroke:#0d9488,stroke-width:1.25px,color:#1f2937
+  classDef guard fill:#dcfce7,stroke:#4ade80,stroke-width:1.5px,color:#1f2937
+  classDef audit fill:#fefce8,stroke:#eab308,stroke-width:1.25px,color:#1f2937
+  classDef planned fill:#ffffff,stroke:#94a3b8,stroke-width:1.25px,stroke-dasharray:5 4,color:#475569
+  class AG,PE actor
   class SRC external
+  class CON,NORM discovery
+  class IV inventory
+  class CP,ID control
+  class GW enforce
+  class C,R,P,A,D step
+  class G guard
+  class HUM,EVD audit
+  class EBUS inventory
+  class RSP planned
+  style ENV fill:#fafafa,stroke:#e5e7eb
+  style PDP fill:#f0fdfa,stroke:#5eead4,stroke-width:2px
+  style OUT fill:#fafafa,stroke:#e5e7eb
 ```
 
 How one request moves through the gateway, how configuration reaches it, how discovery feeds risk

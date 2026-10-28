@@ -7,73 +7,92 @@ the [status table](#what-is-built-and-how-well-it-is-tested) says how.
 ## Components
 
 ```mermaid
-%%{init: {"theme": "base", "fontFamily": "Helvetica, Arial, sans-serif", "themeVariables": {"fontSize": "14px", "primaryTextColor": "#0f172a", "lineColor": "#64748b", "clusterBkg": "#fbfcfe", "clusterBorder": "#e2e8f0", "edgeLabelBackground": "#ffffff"}, "flowchart": {"curve": "basis", "nodeSpacing": 28, "rankSpacing": 48}}}%%
+%%{init: {"theme": "base", "darkMode": false, "fontFamily": "Helvetica, Arial, sans-serif", "fontSize": "16px", "themeVariables": {"background": "#ffffff", "primaryColor": "#eef6ff", "primaryBorderColor": "#93c5fd", "primaryTextColor": "#1f2937", "secondaryColor": "#f3f0ff", "tertiaryColor": "#f8fafc", "lineColor": "#64748b", "textColor": "#1f2937", "clusterBkg": "#f8fafc", "clusterBorder": "#cbd5e1", "edgeLabelBackground": "#ffffff", "titleColor": "#1f2937"}, "flowchart": {"curve": "basis", "nodeSpacing": 40, "rankSpacing": 64, "padding": 16, "htmlLabels": true}}}%%
 flowchart TB
-  subgraph Clients["Clients"]
+  subgraph ENV["Enterprise environments"]
     direction LR
-    A1["AI agent<br/>SDK hooks · LangGraph · CrewAI"]
-    A2["OpenAI client<br/>proxy mode"]
-    A3["AuthZEN PEP<br/>API gateway · MCP server"]
-    OP["Operators, reviewers<br/>console in a browser"]
+    AG["`**AI agents**<br/>SDK · LangGraph · CrewAI<br/>OpenAI proxy · AuthZEN`"]
+    PE["`**People**<br/>console in a browser`"]
+    SRC["`**Infrastructure sources**<br/>audit logs · Kubernetes<br/>DNS · OpenAI · Bedrock · MCP`"]
   end
 
-  subgraph Platform["Guardrail platform"]
-    direction LR
-    GW["Guardrail gateway · :8100<br/>identity · descriptors · session · risk v2<br/>OPA · guardrail engine · advisors<br/>decision table · verification · audit"]
-    CP["Control plane · :8200<br/>catalog · registry · snapshots · publish<br/>review queue · discovery and inventory<br/>analytics · decision log · playground<br/>Memory Firewall relay · console"]
+  subgraph DISC["Discovery plane"]
+    direction TB
+    CON["`**Connectors**<br/>read-only · scheduled`"]
+    NORM["`**Normalize**<br/>resolve · classify · reconcile`"]
   end
 
-  subgraph Services["Guardrail services"]
-    direction LR
-    OPA["OPA · :8181<br/>authz.rego"]
-    AIG["AI Gateway<br/>project-service :8000<br/>instant-redaction :8001 (Presidio)"]
-    MFW["Memory Firewall · :8300<br/>adapter over the unmodified library<br/>VectorGuard · scan · GuardedSaver self-test"]
+  subgraph ENF["Enforcement points"]
+    GW["`**Guardrail gateway** · :8100<br/>/v1/guard · proxy · AuthZEN`"]
   end
 
-  subgraph Data["Data"]
+  subgraph IDC["Identity and configuration"]
     direction LR
-    PG[("Postgres<br/>guardrail · audit<br/>control · inventory")]
-    R[("Redis<br/>sessions · config push<br/>events")]
-    MFD[("memory_firewall_data<br/>Ed25519 keys<br/>events.jsonl")]
+    CP["`**Control plane** · :8200<br/>snapshots · catalog<br/>publish approvals`"]
+    ID["`**Keys and agent binding**<br/>gk_ agent keys<br/>cpk_ admin roles`"]
   end
 
-  subgraph External["External, optional"]
-    direction LR
-    SRC["Discovery sources<br/>audit log · Kubernetes · DNS logs<br/>OpenAI Admin · Bedrock · MCP"]
-    MOD["Moderation endpoint"]
-    ADV["Hosted classifier"]
+  subgraph INV["Agent inventory"]
+    IV["`**Agents, entities, findings**<br/>shadow · unmanaged<br/>stale`"]
   end
 
-  A1 & A2 & A3 -- "gk_ key" --> GW
-  OP -- "cpk_ key" --> CP
-  GW <-- "snapshot + catalog (ETag poll, Redis push)<br/>heartbeat · file review · simulate" --> CP
-  GW -- "policy query" --> OPA
-  GW -- "ai-gateway-pii" --> AIG
-  GW -- "memory-firewall (retrieval)" --> MFW
-  CP -- "status · events · inspect · self-test" --> MFW
-  GW -- "audit rows + outbox" --> PG
-  CP -- "config · reviews · inventory · AUDIT_DSN" --> PG
-  GW <--> R
-  CP --> R
-  MFW --> MFD
-  CP -. "read-only connectors" .-> SRC
-  GW -. "content-moderation" .-> MOD
-  GW -. "advisors http/bedrock" .-> ADV
+  subgraph PDP["Decision plane"]
+    direction LR
+    C["`**Context**<br/>identity · trust`"]
+    R["`**Risk**<br/>signals · bands`"]
+    P["`**Policy**<br/>OPA · deny is final`"]
+    G["`**Guardrails**<br/>PII · secrets<br/>injection · memory`"]
+    A["`**Advisors**<br/>tighten only`"]
+    D["`**Decide**<br/>decision table · verify`"]
+    C --> R --> P --> G --> A --> D
+  end
 
-  classDef client fill:#f5f3ff,stroke:#a78bfa,stroke-width:1px,color:#1e1b4b
-  classDef edge fill:#eff6ff,stroke:#60a5fa,stroke-width:1.5px,color:#0f172a
-  classDef control fill:#f0fdfa,stroke:#2dd4bf,stroke-width:1.5px,color:#0f172a
-  classDef guard fill:#f0fdf4,stroke:#4ade80,stroke-width:1.5px,color:#052e16
-  classDef mfw fill:#ecfdf5,stroke:#059669,stroke-width:2px,color:#052e16
-  classDef store fill:#f8fafc,stroke:#94a3b8,stroke-width:1px,color:#0f172a
-  classDef external fill:#ffffff,stroke:#cbd5e1,stroke-width:1px,stroke-dasharray:4 3,color:#334155
-  class A1,A2,A3,OP client
-  class GW edge
-  class CP control
-  class OPA,AIG guard
-  class MFW mfw
-  class PG,R,MFD store
-  class SRC,MOD,ADV external
+  subgraph OUT["Outcomes"]
+    direction LR
+    HUM["`**Human in the loop**<br/>review queue · approvals`"]
+    EVD["`**Evidence and audit**<br/>decision log · hash chain`"]
+    RSP["`**Response and containment**<br/>planned`"]
+  end
+
+  EBUS["`**Event bus**<br/>decision events · Redis · webhook`"]
+
+  AG -- "gk_ key" --> GW
+  PE -- "cpk_ key" --> CP
+  SRC -.-> CON
+  CON --> NORM --> IV
+  IV -. "findings raise risk" .-> PDP
+  GW --> PDP
+  ID -- "agent binding" --> PDP
+  CP -- "snapshots · catalog" --> GW
+  PDP --> HUM
+  PDP --> EVD
+  PDP -.-> RSP
+  EVD --> EBUS
+
+  classDef actor fill:#f5f3ff,stroke:#a78bfa,stroke-width:1.25px,color:#1f2937
+  classDef external fill:#ffffff,stroke:#94a3b8,stroke-width:1.5px,stroke-dasharray:5 4,color:#1f2937
+  classDef discovery fill:#f0fdfa,stroke:#5eead4,stroke-width:1.25px,color:#1f2937
+  classDef inventory fill:#f1f5f9,stroke:#94a3b8,stroke-width:1.25px,color:#1f2937
+  classDef control fill:#ccfbf1,stroke:#2dd4bf,stroke-width:1.5px,color:#1f2937
+  classDef enforce fill:#eff6ff,stroke:#60a5fa,stroke-width:1.25px,color:#1f2937
+  classDef step fill:#ffffff,stroke:#0d9488,stroke-width:1.25px,color:#1f2937
+  classDef guard fill:#dcfce7,stroke:#4ade80,stroke-width:1.5px,color:#1f2937
+  classDef audit fill:#fefce8,stroke:#eab308,stroke-width:1.25px,color:#1f2937
+  classDef planned fill:#ffffff,stroke:#94a3b8,stroke-width:1.25px,stroke-dasharray:5 4,color:#475569
+  class AG,PE actor
+  class SRC external
+  class CON,NORM discovery
+  class IV inventory
+  class CP,ID control
+  class GW enforce
+  class C,R,P,A,D step
+  class G guard
+  class HUM,EVD audit
+  class EBUS inventory
+  class RSP planned
+  style ENV fill:#fafafa,stroke:#e5e7eb
+  style PDP fill:#f0fdfa,stroke:#5eead4,stroke-width:2px
+  style OUT fill:#fafafa,stroke:#e5e7eb
 ```
 
 | Component | Code | What it owns |
@@ -95,7 +114,7 @@ An agent calls `POST /v1/guard/{input|retrieval|tool|output}` with its gateway k
 sends a prompt, uses retrieved text, runs (or reads the result of) a tool, or returns an answer.
 
 ```mermaid
-%%{init: {"theme": "base", "fontFamily": "Helvetica, Arial, sans-serif", "themeVariables": {"fontSize": "14px", "primaryTextColor": "#0f172a", "actorBkg": "#eff6ff", "actorBorder": "#60a5fa", "actorTextColor": "#0f172a", "actorLineColor": "#cbd5e1", "signalColor": "#64748b", "signalTextColor": "#0f172a", "labelBoxBkgColor": "#f5f3ff", "labelBoxBorderColor": "#a78bfa", "labelTextColor": "#1e1b4b", "loopTextColor": "#1e1b4b", "altSectionBkgColor": "#fbfcfe", "noteBkgColor": "#f0fdf4", "noteBorderColor": "#4ade80", "noteTextColor": "#052e16", "activationBkgColor": "#f0fdfa", "activationBorderColor": "#2dd4bf", "sequenceNumberColor": "#ffffff"}}}%%
+%%{init: {"theme": "base", "darkMode": false, "fontFamily": "Helvetica, Arial, sans-serif", "fontSize": "16px", "themeVariables": {"background": "#ffffff", "primaryColor": "#eef6ff", "primaryBorderColor": "#93c5fd", "primaryTextColor": "#1f2937", "textColor": "#1f2937", "actorBkg": "#eef6ff", "actorBorder": "#93c5fd", "actorTextColor": "#1f2937", "actorLineColor": "#94a3b8", "signalColor": "#475569", "signalTextColor": "#1f2937", "labelBoxBkgColor": "#f3f0ff", "labelBoxBorderColor": "#c4b5fd", "labelTextColor": "#1f2937", "loopTextColor": "#1f2937", "noteBkgColor": "#ecfdf5", "noteBorderColor": "#6ee7b7", "noteTextColor": "#1f2937", "activationBkgColor": "#ccfbf1", "activationBorderColor": "#5eead4", "sequenceNumberColor": "#1f2937", "altSectionBkgColor": "#f8fafc"}, "sequence": {"actorMargin": 60, "messageMargin": 44}}}%%
 sequenceDiagram
   autonumber
   participant Ag as Agent
@@ -172,7 +191,7 @@ code that imports it. Agents' retrieved memory reaches it through the gateway; p
 through the control plane.
 
 ```mermaid
-%%{init: {"theme": "base", "fontFamily": "Helvetica, Arial, sans-serif", "themeVariables": {"fontSize": "14px", "primaryTextColor": "#0f172a", "lineColor": "#64748b", "clusterBkg": "#fbfcfe", "clusterBorder": "#e2e8f0", "edgeLabelBackground": "#ffffff"}, "flowchart": {"curve": "basis", "nodeSpacing": 36, "rankSpacing": 56}}}%%
+%%{init: {"theme": "base", "darkMode": false, "fontFamily": "Helvetica, Arial, sans-serif", "fontSize": "16px", "themeVariables": {"background": "#ffffff", "primaryColor": "#eef6ff", "primaryBorderColor": "#93c5fd", "primaryTextColor": "#1f2937", "secondaryColor": "#f3f0ff", "tertiaryColor": "#f8fafc", "lineColor": "#64748b", "textColor": "#1f2937", "clusterBkg": "#f8fafc", "clusterBorder": "#cbd5e1", "edgeLabelBackground": "#ffffff", "titleColor": "#1f2937"}, "flowchart": {"curve": "basis", "nodeSpacing": 40, "rankSpacing": 64, "padding": 16, "htmlLabels": true}}}%%
 flowchart LR
   AG["Agent<br/>retrieval hook"] -- "POST /v1/guard/retrieval<br/>chunks + metadata.source_type, writer" --> GW
 
@@ -192,14 +211,14 @@ flowchart LR
   LIB --> KEYS[("Data volume<br/>Ed25519 keys · events.jsonl<br/>selftest scratch DBs")]
   PL -. "drop · hold · block<br/>findings: MEMORY_QUARANTINED<br/>MEMORY_INJECTION_TEXT" .-> GW
 
-  classDef client fill:#f5f3ff,stroke:#a78bfa,stroke-width:1px,color:#1e1b4b
-  classDef edge fill:#eff6ff,stroke:#60a5fa,stroke-width:1.5px,color:#0f172a
-  classDef control fill:#f0fdfa,stroke:#2dd4bf,stroke-width:1.5px,color:#0f172a
-  classDef guard fill:#f0fdf4,stroke:#4ade80,stroke-width:1.5px,color:#052e16
-  classDef mfw fill:#ecfdf5,stroke:#059669,stroke-width:2px,color:#052e16
-  classDef store fill:#f8fafc,stroke:#94a3b8,stroke-width:1px,color:#0f172a
-  classDef external fill:#ffffff,stroke:#cbd5e1,stroke-width:1px,stroke-dasharray:4 3,color:#334155
-  classDef finding fill:#fffbeb,stroke:#fbbf24,stroke-width:1px,color:#78350f
+  classDef client fill:#f3f0ff,stroke:#a78bfa,stroke-width:1.5px,color:#1f2937
+  classDef edge fill:#e0f2fe,stroke:#38bdf8,stroke-width:1.5px,color:#1f2937
+  classDef control fill:#ccfbf1,stroke:#2dd4bf,stroke-width:1.5px,color:#1f2937
+  classDef guard fill:#dcfce7,stroke:#4ade80,stroke-width:1.5px,color:#1f2937
+  classDef mfw fill:#d1fae5,stroke:#10b981,stroke-width:2.5px,color:#1f2937
+  classDef store fill:#f1f5f9,stroke:#94a3b8,stroke-width:1.5px,color:#1f2937
+  classDef external fill:#ffffff,stroke:#94a3b8,stroke-width:1.5px,stroke-dasharray:5 4,color:#1f2937
+  classDef finding fill:#fef9c3,stroke:#facc15,stroke-width:1.5px,color:#1f2937
   class AG,UI client
   class GW,PL edge
   class CP control
@@ -228,7 +247,7 @@ library's `lab.tamper.ATTACKS` in a subprocess against scratch databases. Detail
 ## Configuration flow
 
 ```mermaid
-%%{init: {"theme": "base", "fontFamily": "Helvetica, Arial, sans-serif", "themeVariables": {"fontSize": "14px", "primaryTextColor": "#0f172a", "lineColor": "#64748b", "clusterBkg": "#fbfcfe", "clusterBorder": "#e2e8f0", "edgeLabelBackground": "#ffffff"}, "flowchart": {"curve": "basis", "nodeSpacing": 36, "rankSpacing": 56}}}%%
+%%{init: {"theme": "base", "darkMode": false, "fontFamily": "Helvetica, Arial, sans-serif", "fontSize": "16px", "themeVariables": {"background": "#ffffff", "primaryColor": "#eef6ff", "primaryBorderColor": "#93c5fd", "primaryTextColor": "#1f2937", "secondaryColor": "#f3f0ff", "tertiaryColor": "#f8fafc", "lineColor": "#64748b", "textColor": "#1f2937", "clusterBkg": "#f8fafc", "clusterBorder": "#cbd5e1", "edgeLabelBackground": "#ffffff", "titleColor": "#1f2937"}, "flowchart": {"curve": "basis", "nodeSpacing": 40, "rankSpacing": 64, "padding": 16, "htmlLabels": true}}}%%
 flowchart LR
   E["Editor<br/>Pipeline · Tenants & keys"] -- "working set" --> CP["Control plane"]
   CP -- "publish: compile + validate<br/>production: second admin approves" --> S[("Snapshot vN<br/>immutable")]
@@ -237,14 +256,14 @@ flowchart LR
   GW -- "disk cache" --> GW
   GW -- "heartbeat: installed guardrails<br/>versions · capabilities" --> CP
 
-  classDef client fill:#f5f3ff,stroke:#a78bfa,stroke-width:1px,color:#1e1b4b
-  classDef edge fill:#eff6ff,stroke:#60a5fa,stroke-width:1.5px,color:#0f172a
-  classDef control fill:#f0fdfa,stroke:#2dd4bf,stroke-width:1.5px,color:#0f172a
-  classDef guard fill:#f0fdf4,stroke:#4ade80,stroke-width:1.5px,color:#052e16
-  classDef mfw fill:#ecfdf5,stroke:#059669,stroke-width:2px,color:#052e16
-  classDef store fill:#f8fafc,stroke:#94a3b8,stroke-width:1px,color:#0f172a
-  classDef external fill:#ffffff,stroke:#cbd5e1,stroke-width:1px,stroke-dasharray:4 3,color:#334155
-  classDef finding fill:#fffbeb,stroke:#fbbf24,stroke-width:1px,color:#78350f
+  classDef client fill:#f3f0ff,stroke:#a78bfa,stroke-width:1.5px,color:#1f2937
+  classDef edge fill:#e0f2fe,stroke:#38bdf8,stroke-width:1.5px,color:#1f2937
+  classDef control fill:#ccfbf1,stroke:#2dd4bf,stroke-width:1.5px,color:#1f2937
+  classDef guard fill:#dcfce7,stroke:#4ade80,stroke-width:1.5px,color:#1f2937
+  classDef mfw fill:#d1fae5,stroke:#10b981,stroke-width:2.5px,color:#1f2937
+  classDef store fill:#f1f5f9,stroke:#94a3b8,stroke-width:1.5px,color:#1f2937
+  classDef external fill:#ffffff,stroke:#94a3b8,stroke-width:1.5px,stroke-dasharray:5 4,color:#1f2937
+  classDef finding fill:#fef9c3,stroke:#facc15,stroke-width:1.5px,color:#1f2937
   class E client
   class CP control
   class GW edge
@@ -272,7 +291,7 @@ flowchart LR
 ## Discovery feeds risk
 
 ```mermaid
-%%{init: {"theme": "base", "fontFamily": "Helvetica, Arial, sans-serif", "themeVariables": {"fontSize": "14px", "primaryTextColor": "#0f172a", "lineColor": "#64748b", "clusterBkg": "#fbfcfe", "clusterBorder": "#e2e8f0", "edgeLabelBackground": "#ffffff"}, "flowchart": {"curve": "basis", "nodeSpacing": 36, "rankSpacing": 56}}}%%
+%%{init: {"theme": "base", "darkMode": false, "fontFamily": "Helvetica, Arial, sans-serif", "fontSize": "16px", "themeVariables": {"background": "#ffffff", "primaryColor": "#eef6ff", "primaryBorderColor": "#93c5fd", "primaryTextColor": "#1f2937", "secondaryColor": "#f3f0ff", "tertiaryColor": "#f8fafc", "lineColor": "#64748b", "textColor": "#1f2937", "clusterBkg": "#f8fafc", "clusterBorder": "#cbd5e1", "edgeLabelBackground": "#ffffff", "titleColor": "#1f2937"}, "flowchart": {"curve": "basis", "nodeSpacing": 40, "rankSpacing": 64, "padding": 16, "htmlLabels": true}}}%%
 flowchart LR
   K["Connectors<br/>gateway · kubernetes · dns_log<br/>openai_admin · aws_bedrock · mcp"] --> O["Observations"]
   O --> E["Entities<br/>merged by strong keys"] --> CL["Classification<br/>confirmed · probable · not agent"]
@@ -280,14 +299,14 @@ flowchart LR
   RC --> F["Findings<br/>shadow_agent · unmanaged_agent · stale_agent<br/>tool_definition_changed"]
   F -- "catalog: open_findings, flagged_tools" --> GW["Gateway risk<br/>AGENT_FINDING +20<br/>TOOL_DEFINITION_CHANGED +25"]
 
-  classDef client fill:#f5f3ff,stroke:#a78bfa,stroke-width:1px,color:#1e1b4b
-  classDef edge fill:#eff6ff,stroke:#60a5fa,stroke-width:1.5px,color:#0f172a
-  classDef control fill:#f0fdfa,stroke:#2dd4bf,stroke-width:1.5px,color:#0f172a
-  classDef guard fill:#f0fdf4,stroke:#4ade80,stroke-width:1.5px,color:#052e16
-  classDef mfw fill:#ecfdf5,stroke:#059669,stroke-width:2px,color:#052e16
-  classDef store fill:#f8fafc,stroke:#94a3b8,stroke-width:1px,color:#0f172a
-  classDef external fill:#ffffff,stroke:#cbd5e1,stroke-width:1px,stroke-dasharray:4 3,color:#334155
-  classDef finding fill:#fffbeb,stroke:#fbbf24,stroke-width:1px,color:#78350f
+  classDef client fill:#f3f0ff,stroke:#a78bfa,stroke-width:1.5px,color:#1f2937
+  classDef edge fill:#e0f2fe,stroke:#38bdf8,stroke-width:1.5px,color:#1f2937
+  classDef control fill:#ccfbf1,stroke:#2dd4bf,stroke-width:1.5px,color:#1f2937
+  classDef guard fill:#dcfce7,stroke:#4ade80,stroke-width:1.5px,color:#1f2937
+  classDef mfw fill:#d1fae5,stroke:#10b981,stroke-width:2.5px,color:#1f2937
+  classDef store fill:#f1f5f9,stroke:#94a3b8,stroke-width:1.5px,color:#1f2937
+  classDef external fill:#ffffff,stroke:#94a3b8,stroke-width:1.5px,stroke-dasharray:5 4,color:#1f2937
+  classDef finding fill:#fef9c3,stroke:#facc15,stroke-width:1.5px,color:#1f2937
   class K external
   class O,E,CL,RC control
   class F finding

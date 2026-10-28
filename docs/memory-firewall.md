@@ -25,7 +25,7 @@ self-test.
 ## Architecture and boundary
 
 ```mermaid
-%%{init: {"theme": "base", "fontFamily": "Helvetica, Arial, sans-serif", "themeVariables": {"fontSize": "14px", "primaryTextColor": "#0f172a", "lineColor": "#64748b", "clusterBkg": "#fbfcfe", "clusterBorder": "#e2e8f0", "edgeLabelBackground": "#ffffff"}, "flowchart": {"curve": "basis", "nodeSpacing": 36, "rankSpacing": 56}}}%%
+%%{init: {"theme": "base", "darkMode": false, "fontFamily": "Helvetica, Arial, sans-serif", "fontSize": "16px", "themeVariables": {"background": "#ffffff", "primaryColor": "#eef6ff", "primaryBorderColor": "#93c5fd", "primaryTextColor": "#1f2937", "secondaryColor": "#f3f0ff", "tertiaryColor": "#f8fafc", "lineColor": "#64748b", "textColor": "#1f2937", "clusterBkg": "#f8fafc", "clusterBorder": "#cbd5e1", "edgeLabelBackground": "#ffffff", "titleColor": "#1f2937"}, "flowchart": {"curve": "basis", "nodeSpacing": 40, "rankSpacing": 64, "padding": 16, "htmlLabels": true}}}%%
 flowchart LR
   subgraph Guardrail["Guardrail repository (changed)"]
     direction TB
@@ -53,12 +53,12 @@ flowchart LR
   API --> ST --> LAB --> G
   FW --> VOL[("/var/lib/memory-firewall<br/>keys/ · events.jsonl · selftest/")]
 
-  classDef client fill:#f5f3ff,stroke:#a78bfa,stroke-width:1px,color:#1e1b4b
-  classDef edge fill:#eff6ff,stroke:#60a5fa,stroke-width:1.5px,color:#0f172a
-  classDef control fill:#f0fdfa,stroke:#2dd4bf,stroke-width:1.5px,color:#0f172a
-  classDef guard fill:#f0fdf4,stroke:#4ade80,stroke-width:1.5px,color:#052e16
-  classDef mfw fill:#ecfdf5,stroke:#059669,stroke-width:2px,color:#052e16
-  classDef store fill:#f8fafc,stroke:#94a3b8,stroke-width:1px,color:#0f172a
+  classDef client fill:#f3f0ff,stroke:#a78bfa,stroke-width:1.5px,color:#1f2937
+  classDef edge fill:#e0f2fe,stroke:#38bdf8,stroke-width:1.5px,color:#1f2937
+  classDef control fill:#ccfbf1,stroke:#2dd4bf,stroke-width:1.5px,color:#1f2937
+  classDef guard fill:#dcfce7,stroke:#4ade80,stroke-width:1.5px,color:#1f2937
+  classDef mfw fill:#d1fae5,stroke:#10b981,stroke-width:2.5px,color:#1f2937
+  classDef store fill:#f1f5f9,stroke:#94a3b8,stroke-width:1.5px,color:#1f2937
   class UI client
   class PL edge
   class CPR control
@@ -89,7 +89,7 @@ flowchart LR
 ## Request flow: retrieved memory
 
 ```mermaid
-%%{init: {"theme": "base", "fontFamily": "Helvetica, Arial, sans-serif", "themeVariables": {"fontSize": "14px", "primaryTextColor": "#0f172a", "actorBkg": "#eff6ff", "actorBorder": "#60a5fa", "actorTextColor": "#0f172a", "actorLineColor": "#cbd5e1", "signalColor": "#64748b", "signalTextColor": "#0f172a", "labelBoxBkgColor": "#f5f3ff", "labelBoxBorderColor": "#a78bfa", "labelTextColor": "#1e1b4b", "loopTextColor": "#1e1b4b", "altSectionBkgColor": "#fbfcfe", "noteBkgColor": "#f0fdf4", "noteBorderColor": "#4ade80", "noteTextColor": "#052e16", "sequenceNumberColor": "#ffffff"}}}%%
+%%{init: {"theme": "base", "darkMode": false, "fontFamily": "Helvetica, Arial, sans-serif", "fontSize": "16px", "themeVariables": {"background": "#ffffff", "primaryColor": "#eef6ff", "primaryBorderColor": "#93c5fd", "primaryTextColor": "#1f2937", "textColor": "#1f2937", "actorBkg": "#eef6ff", "actorBorder": "#93c5fd", "actorTextColor": "#1f2937", "actorLineColor": "#94a3b8", "signalColor": "#475569", "signalTextColor": "#1f2937", "labelBoxBkgColor": "#f3f0ff", "labelBoxBorderColor": "#c4b5fd", "labelTextColor": "#1f2937", "loopTextColor": "#1f2937", "noteBkgColor": "#ecfdf5", "noteBorderColor": "#6ee7b7", "noteTextColor": "#1f2937", "activationBkgColor": "#ccfbf1", "activationBorderColor": "#5eead4", "sequenceNumberColor": "#1f2937", "altSectionBkgColor": "#f8fafc"}, "sequence": {"actorMargin": 60, "messageMargin": 44}}}%%
 sequenceDiagram
   autonumber
   participant Ag as Agent
